@@ -7,7 +7,7 @@ type Colonne = { cle: string; app: string; titre: string };
 type Externe = { id: string; titre: string };
 type LigneBulletin = {
   id: string; nom: string; prenom: string; calculee: number | null; finale: number | null; figeeLe: string | null;
-  externes: Record<string, number | null>; appreciation: string;
+  externes: Record<string, number | null>; appreciation: string; studio?: { eleve: string; prof: string };
 };
 type Bulletin = {
   periodes: Periodes; classes: { cle: string; nom: string }[]; colonnesDispo: Colonne[];
@@ -119,7 +119,13 @@ export function VueBulletin() {
                     {externes.map(x => (
                       <td key={x.id}><ChampNote valeur={e.externes[x.id] ?? null} onValider={v => enregistrer(e.id, { externes: { ...e.externes, [x.id]: v } })} /></td>
                     ))}
-                    <td className="appreciation"><ChampTexte valeur={e.appreciation} onValider={v => enregistrer(e.id, { appreciation: v })} /></td>
+                    <td className="appreciation">
+                      <ChampTexte valeur={e.appreciation} onValider={v => enregistrer(e.id, { appreciation: v })} />
+                      {!!e.studio?.prof && e.studio.prof !== e.appreciation && (
+                        <div className="studio"><span>Studio : {e.studio.prof}</span> <button className="lien" onClick={() => enregistrer(e.id, { appreciation: e.studio!.prof })}>Reprendre</button></div>
+                      )}
+                      {!!e.studio?.eleve && <div className="studio eleve">L'élève : {e.studio.eleve}</div>}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -191,7 +197,7 @@ function ReglageColonnes({ b, trimestre, classe, onFini }: { b: Bulletin; trimes
 type VuePP = {
   nom: string;
   matieres: { enseignant: string; email: string; externes: Externe[]; notes: Record<string, { note: number | null; definitive: boolean; externes: Record<string, number | null>; appreciation: string }> }[];
-  eleves: { id: string; nom: string; prenom: string; moyenne: number | null }[];
+  eleves: { id: string; nom: string; prenom: string; moyenne: number | null; autoEval: string }[];
 };
 
 export function VueProfPrincipal({ classes, periodes }: { classes: { cle: string; nom: string }[]; periodes: Periodes }) {
@@ -233,7 +239,10 @@ export function VueProfPrincipal({ classes, periodes }: { classes: { cle: string
                     ];
                   })}
                   <td><strong>{note(e.moyenne)}</strong></td>
-                  <td className="appreciation">{v.matieres.filter(m => m.notes[e.id]?.appreciation).map(m => <div key={m.email}><em>{m.enseignant} :</em> {m.notes[e.id].appreciation}</div>)}</td>
+                  <td className="appreciation">
+                    {v.matieres.filter(m => m.notes[e.id]?.appreciation).map(m => <div key={m.email}><em>{m.enseignant} :</em> {m.notes[e.id].appreciation}</div>)}
+                    {e.autoEval && <div className="studio eleve"><em>L'élève :</em> {e.autoEval}</div>}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -9,6 +9,7 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { cleClasse, decider, lireListe, normaliser, type EleveRef } from "./lib/correspondance.ts";
 import { APPLICATIONS, type Application } from "./lib/applications.ts";
 import { empreinte, genererMotDePasse } from "./lib/parents.ts";
+import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
 import { dateValide, estTrimestre, lireNote, moyenne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
 
 // ---------------------------------------------------------------------------
@@ -23,6 +24,7 @@ import { dateValide, estTrimestre, lireNote, moyenne, noteSur20, periodesParDefa
 //                             (SUIVI_CLE_TEXTETROUS, SUIVI_CLE_MEMORISER…) ; sans clé, l'application est « bientôt »
 //   SUIVI_URL_<APPLI>         adresse d'une application, si elle diffère de l'adresse prévue
 //   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_FROM  envoi des e-mails (codes de confirmation, mots de passe des parents)
+//   STUDIO_FIRESTORE_DATABASE_ID  base du Studio d'Appréciations (même projet Google que Suivi)
 //   ADRESSE_PUBLIQUE          adresse de Suivi dans les e-mails (sinon https://suivi.jepeuxapprendre.fr)
 // ---------------------------------------------------------------------------
 
@@ -50,6 +52,9 @@ const adminAuth = getAuth(adminApp);
 const db = databaseId === "(default)" ? getFirestore(adminApp) : getFirestore(adminApp, databaseId);
 db.settings({ ignoreUndefinedProperties: true });
 
+// Le Studio d'Appréciations partage le projet Google de Suivi : ses appréciations sont lues directement dans sa base.
+const studioDb = getFirestore(adminApp, process.env.STUDIO_FIRESTORE_DATABASE_ID || "ai-studio-f415485f-4d6c-4b39-a9de-42a310ca2292");
+
 const ADMIN_EMAILS = String(process.env.ADMIN_EMAILS ?? "alimatlea@gmail.com").split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
 
 // --- Applications du site ------------------------------------------------------------
@@ -57,6 +62,8 @@ const varApp = (prefixe: string, a: Application) => process.env[`${prefixe}_${a.
 const cleDe = (a: Application) => varApp("SUIVI_CLE", a);
 const urlDe = (a: Application) => (varApp("SUIVI_URL", a) || a.url).replace(/\/+$/, "");
 const appParId = (id: unknown) => APPLICATIONS.find(a => a.id === id);
+const parPorte = (a: Application) => (a.lecture || "porte") === "porte";
+const estPrete = (a: Application) => (parPorte(a) ? !!cleDe(a) : true);
 
 /** Appel de la porte de liaison d'une application. */
 async function porte(a: Application, chemin: string, body?: any): Promise<any> {
@@ -240,7 +247,7 @@ app.get("/api/health", route(async (req, res) => {
   if (req.query.db !== undefined) {
     out.projet = projectId; out.base = databaseId;
     try { await db.collection("eleves").limit(1).get(); out.acces = "ok"; } catch (e: any) { out.acces = String(e?.message || e).slice(0, 200); }
-    out.applications = APPLICATIONS.filter(a => a.eleves).map(a => ({ id: a.id, reliee: !!cleDe(a) }));
+    out.applications = APPLICATIONS.filter(a => a.eleves).map(a => ({ id: a.id, reliee: estPrete(a) }));
     out.mails = !!mailer;
   }
   res.json(out);
@@ -252,7 +259,7 @@ app.get("/api/moi", exigerEnseignant(), route(async (req, res) => {
   const f = await fiche(e);
   res.json({
     email: e.email, nom: f.nom || e.nom, isAdmin: e.isAdmin, choisies: Array.isArray(f.choisies) ? f.choisies : null, apps: f.apps || {},
-    catalogue: APPLICATIONS.map(a => ({ id: a.id, code: a.code, nom: a.nom, url: urlDe(a), eleves: a.eleves, prete: !!cleDe(a) })),
+    catalogue: APPLICATIONS.map(a => ({ id: a.id, code: a.code, nom: a.nom, url: urlDe(a), eleves: a.eleves, prete: estPrete(a) })),
     mails: !!mailer,
   });
 }));
@@ -294,7 +301,8 @@ app.post("/api/apps/relier", exigerEnseignant(), route(async (req, res) => {
     if (!c || c.email !== email || c.expire < Date.now() || !code || c.empreinte !== empreinteCode(code)) throw httpError(403, "Code incorrect ou expiré.");
     await ref.delete();
   }
-  const r = await porte(a, `/api/suivi/enseignant?email=${encodeURIComponent(email)}`);
+  // Studio d'Appréciations : même compte que Suivi, rien à vérifier ailleurs.
+  const r = parPorte(a) ? await porte(a, `/api/suivi/enseignant?email=${encodeURIComponent(email)}`) : { teacher: { name: e.nom } };
   if (!r.teacher) throw httpError(404, `Aucun compte enseignant avec l'adresse ${email} dans ${a.nom}.`);
   await fiche(e);
   await db.doc(`enseignants/${e.uid}`).set({
@@ -302,7 +310,7 @@ app.post("/api/apps/relier", exigerEnseignant(), route(async (req, res) => {
     choisies: FieldValue.arrayUnion(a.id),
   }, { merge: true });
   // Les parents qui ont déjà un mot de passe le gardent dans cette application aussi.
-  db.collection("parents").get().then(snap => {
+  if (parPorte(a)) db.collection("parents").get().then(snap => {
     const cibles = new Map<string, Record<number, string | null>>();
     for (const d of snap.docs) cibles.set(String(d.get("refId")), { ...(cibles.get(String(d.get("refId"))) || {}), [Number(d.get("n"))]: String(d.get("empreinte")) });
     return pousserEmpreintes(cibles, { uid: e.uid, app: a.id });
@@ -321,7 +329,7 @@ app.post("/api/apps/retirer", exigerEnseignant(), route(async (req, res) => {
 async function lireApplications(e: Enseignant) {
   const f = await fiche(e);
   const choisies: string[] | null = Array.isArray(f.choisies) ? f.choisies : null;
-  const reliees = APPLICATIONS.filter(a => a.eleves && f.apps?.[a.id]?.email && (!choisies || choisies.includes(a.id)));
+  const reliees = APPLICATIONS.filter(a => a.eleves && parPorte(a) && f.apps?.[a.id]?.email && (!choisies || choisies.includes(a.id)));
   const lus = await Promise.all(reliees.map(async a => {
     try { return { app: a, d: await donnees(a, f.apps[a.id].email), erreur: null as string | null }; } catch (err: any) { return { app: a, d: null, erreur: String(err?.message || err) }; }
   }));
@@ -417,19 +425,33 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
   const colonnes: { cle: string; app: string; titre: string }[] = Array.isArray(b.colonnes) ? b.colonnes : [];
   const externes: { id: string; titre: string }[] = Array.isArray(b.externes) ? b.externes : [];
   const notes: Record<string, any> = b.eleves || {};
-  const eleves = elevesDeClasse(t, classe).map(r => {
+  const refsClasse = elevesDeClasse(t, classe);
+  const f = await fiche(e);
+  let studio = new Map<string, TextesStudio>();
+  if (f.apps?.appreciations) {
+    try {
+      const snap = await studioDb.collection("appreciations").where("teacherId", "==", e.uid).get();
+      studio = textesParEleve(snap.docs.map(d => d.data()), trimestre, refsClasse);
+    } catch (err) { console.error("Lecture du Studio d'Appréciations :", err); }
+  }
+  const eleves = refsClasse.map(r => {
     const n = notes[r.id] || {};
     const calculee = colonnes.length ? noteSur20(t.essais.get(r.id) || {}, colonnes.map(c => c.cle), per[trimestre]) : null;
     return {
       id: r.id, nom: r.nom, prenom: r.prenom, calculee,
       finale: typeof n.finale === "number" ? n.finale : null, figeeLe: n.figeeLe || null,
       externes: n.externes || {}, appreciation: n.appreciation || "",
+      studio: { eleve: studio.get(r.id)?.eleve?.texte || "", prof: studio.get(r.id)?.prof?.texte || "" },
     };
   });
   // Copie des notes calculées, pour que le prof principal les voie sans accès aux applications de ce collègue.
   const copie = Object.fromEntries(eleves.map(x => [x.id, x.calculee]));
   const noms = Object.fromEntries(eleves.map(x => [x.id, `${x.nom} ${x.prenom}`.trim()]));
-  if (b.classeNom && JSON.stringify([b.calculees || {}, b.noms || {}]) !== JSON.stringify([copie, noms])) await ref.set({ calculees: copie, noms, calculeesLe: new Date().toISOString() }, { merge: true });
+  // L'appréciation que l'élève a écrite lui-même, montrée aussi au prof principal.
+  const autoEval = Object.fromEntries(eleves.filter(x => x.studio.eleve).map(x => [x.id, x.studio.eleve]));
+  if (b.classeNom && JSON.stringify([b.calculees || {}, b.noms || {}, b.autoEval || {}]) !== JSON.stringify([copie, noms, autoEval])) {
+    await ref.set({ calculees: copie, noms, autoEval, calculeesLe: new Date().toISOString() }, { merge: true });
+  }
   res.json({
     periodes: per, classes, colonnesDispo, trimestre, classe,
     colonnes, externes, eleves,
@@ -536,9 +558,10 @@ app.get("/api/pp/bulletin", exigerEnseignant(), route(async (req, res) => {
   const ids = refs.length ? refs.map(r => ({ id: r.id, nom: r.nom, prenom: r.prenom }))
     : Array.from(new Set(matieres.flatMap(m => Object.keys(m.notes)))).map(id => ({ id, nom: nomDe.get(id) || id, prenom: "" }))
       .sort((a, b) => a.nom.localeCompare(b.nom, "fr"));
+  const autoEval = new Map<string, string>(snap.docs.flatMap(d => Object.entries<string>(d.get("autoEval") || {})));
   res.json({
     classe, nom: c.nom || classe, trimestre, matieres,
-    eleves: ids.map(x => ({ ...x, moyenne: moyenne(matieres.map(m => m.notes[x.id]?.note)) })),
+    eleves: ids.map(x => ({ ...x, moyenne: moyenne(matieres.map(m => m.notes[x.id]?.note)), autoEval: autoEval.get(x.id) || "" })),
   });
 }));
 
@@ -613,7 +636,7 @@ async function pousserEmpreintes(cibles: Map<string, Record<number, string | nul
     const f = doc.data() || {};
     for (const a of APPLICATIONS) {
       const email = f.apps?.[a.id]?.email;
-      if (!a.eleves || !email || !cleDe(a) || (seulement && seulement.app !== a.id)) continue;
+      if (!a.eleves || !parPorte(a) || !email || !cleDe(a) || (seulement && seulement.app !== a.id)) continue;
       try {
         const d = await donnees(a, email);
         const { provisoire, resultat } = await rapprocher([{ app: a, d }]);
