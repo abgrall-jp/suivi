@@ -8,6 +8,7 @@ import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { cleClasse, decider, lireListe, normaliser, type EleveRef } from "./lib/correspondance.ts";
 import { APPLICATIONS, type Application } from "./lib/applications.ts";
+import { dateValide, estTrimestre, lireNote, moyenne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
 
 // ---------------------------------------------------------------------------
 // Serveur de Suivi, le suivi global des applications Je peux apprendre (hébergement o2switch).
@@ -315,37 +316,212 @@ async function lireApplications(e: Enseignant) {
   return lus;
 }
 
-// Tableau en direct : une ligne par élève, un bloc par application.
-app.get("/api/tableau", exigerEnseignant(), route(async (req, res) => {
-  const lus = await lireApplications(ensDe(req));
+type Resultat = { percent: number; score: string; at: number | null };
+
+/** Résultats de l'enseignant rangés par élève de référence (le plus récent essai pour chaque exercice). */
+async function calculerTableau(e: Enseignant) {
+  const lus = await lireApplications(e);
   const ok = lus.filter((l): l is { app: Application; d: Donnees; erreur: null } => !!l.d);
   const { refs, provisoire, resultat } = await rapprocher(ok);
   const refDe = new Map(resultat.filter(r => r.refId).map(r => [`${r.app}:${r.studentId}`, r.refId as string]));
-  const lignes = new Map<string, { refId: string; resultats: Record<string, { percent: number; score: string; at: number | null }> }>();
+  // Tous les essais, pour le bulletin (filtrés par trimestre) ; le plus récent, pour le tableau.
+  const essais = new Map<string, Record<string, Resultat[]>>();
   for (const { app: a, d } of ok) {
     for (const r of d.results) {
       const refId = refDe.get(`${a.id}:${r.studentId}`);
       if (!refId) continue;
-      const l = lignes.get(refId) || { refId, resultats: {} };
-      const cle = `${a.id}:${r.exerciseId}`;
-      const avant = l.resultats[cle];
-      // Plusieurs essais au même exercice : le plus récent.
-      if (!avant || (r.completedAt || 0) >= (avant.at || 0)) l.resultats[cle] = { percent: Number(r.percent) || 0, score: String(r.score || ""), at: r.completedAt };
-      lignes.set(refId, l);
+      const parExo = essais.get(refId) || {};
+      (parExo[`${a.id}:${r.exerciseId}`] ||= []).push({ percent: Number(r.percent) || 0, score: String(r.score || ""), at: r.completedAt ?? null });
+      essais.set(refId, parExo);
     }
   }
-  const presents = new Set(resultat.map(r => r.refId).filter(Boolean));
-  res.json({
-    provisoire,
+  const plusRecent = (liste: Resultat[]) => liste.reduce((m, x) => ((x.at || 0) >= (m.at || 0) ? x : m));
+  const presents = new Set(resultat.map(r => r.refId).filter(Boolean) as string[]);
+  return {
+    provisoire, refs, presents, essais, plusRecent,
     applications: lus.map(l => ({
       id: l.app.id, code: l.app.code, nom: l.app.nom, erreur: l.erreur,
       exercices: (l.d?.exercises || []).filter(x => l.d!.results.some(r => r.exerciseId === x.id)).map(x => ({ id: x.id, titre: x.title })),
     })),
-    eleves: refs.filter(r => presents.has(r.id))
-      .sort((a, b) => a.classe.localeCompare(b.classe, "fr") || a.nom.localeCompare(b.nom, "fr") || a.prenom.localeCompare(b.prenom, "fr"))
-      .map(r => ({ id: r.id, classe: r.classe, nom: r.nom, prenom: r.prenom, resultats: lignes.get(r.id)?.resultats || {} })),
     aVerifier: resultat.filter(r => r.statut === "a_verifier" || r.statut === "aucun").length,
+  };
+}
+
+const parNom = (a: EleveRef, b: EleveRef) => a.classe.localeCompare(b.classe, "fr") || a.nom.localeCompare(b.nom, "fr") || a.prenom.localeCompare(b.prenom, "fr");
+
+// Tableau en direct : une ligne par élève, un bloc par application.
+app.get("/api/tableau", exigerEnseignant(), route(async (req, res) => {
+  const t = await calculerTableau(ensDe(req));
+  res.json({
+    provisoire: t.provisoire,
+    applications: t.applications,
+    eleves: t.refs.filter(r => t.presents.has(r.id)).sort(parNom).map(r => ({
+      id: r.id, classe: r.classe, nom: r.nom, prenom: r.prenom,
+      resultats: Object.fromEntries(Object.entries(t.essais.get(r.id) || {}).map(([k, v]) => [k, t.plusRecent(v)])),
+    })),
+    aVerifier: t.aVerifier,
     lu: Date.now(),
+  });
+}));
+
+// --- Bulletin, par trimestre et par classe ---------------------------------------------------
+// bulletins/{uid}__{trimestre}__{classe} : colonnes retenues, notes externes, et pour chaque élève la note définitive
+// (figée : plus mise à jour par le logiciel), les notes externes et l'appréciation de l'enseignant.
+// Le prof principal d'une classe (classes/{classe}.pp) lit les bulletins de ses collègues sans pouvoir les modifier.
+
+async function periodes(): Promise<Periodes> {
+  const p = periodesParDefaut();
+  const reglage = (await db.doc("reglages/trimestres").get()).data() || {};
+  for (const t of TRIMESTRES) if (dateValide(reglage[t]?.debut) && dateValide(reglage[t]?.fin)) p[t] = { debut: reglage[t].debut, fin: reglage[t].fin };
+  return p;
+}
+
+const idBulletin = (uid: string, t: Trimestre, classe: string) => `${uid}__${t}__${classe}`;
+const texteCourt = (v: unknown, max: number) => String(v ?? "").slice(0, max);
+
+function lireTrimestreClasse(src: any) {
+  const trimestre = src?.trimestre;
+  const classe = cleClasse(String(src?.classe || ""));
+  if (!estTrimestre(trimestre)) throw httpError(400, "Trimestre incorrect.");
+  if (!classe || classe.length > 40) throw httpError(400, "Classe incorrecte.");
+  return { trimestre, classe };
+}
+
+/** Élèves d'une classe : toute la liste de l'établissement, ou (liste provisoire) ceux qui ont un compte dans les applications. */
+const elevesDeClasse = (t: Awaited<ReturnType<typeof calculerTableau>>, classe: string) =>
+  t.refs.filter(r => cleClasse(r.classe) === classe && (!t.provisoire || t.presents.has(r.id))).sort(parNom);
+
+app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const per = await periodes();
+  const t = await calculerTableau(e);
+  const classes = Array.from(new Map(t.refs.filter(r => t.presents.has(r.id)).map(r => [cleClasse(r.classe), r.classe])).entries())
+    .map(([cle, nom]) => ({ cle, nom })).sort((a, b) => a.nom.localeCompare(b.nom, "fr"));
+  const colonnesDispo = t.applications.flatMap(a => a.exercices.map(x => ({ cle: `${a.id}:${x.id}`, app: a.nom, titre: x.titre })));
+  if (!req.query.trimestre || !req.query.classe) return res.json({ periodes: per, classes, colonnesDispo });
+  const { trimestre, classe } = lireTrimestreClasse(req.query);
+  const ref = db.doc(`bulletins/${idBulletin(e.uid, trimestre, classe)}`);
+  const b = (await ref.get()).data() || {};
+  const colonnes: { cle: string; app: string; titre: string }[] = Array.isArray(b.colonnes) ? b.colonnes : [];
+  const externes: { id: string; titre: string }[] = Array.isArray(b.externes) ? b.externes : [];
+  const notes: Record<string, any> = b.eleves || {};
+  const eleves = elevesDeClasse(t, classe).map(r => {
+    const n = notes[r.id] || {};
+    const calculee = colonnes.length ? noteSur20(t.essais.get(r.id) || {}, colonnes.map(c => c.cle), per[trimestre]) : null;
+    return {
+      id: r.id, nom: r.nom, prenom: r.prenom, calculee,
+      finale: typeof n.finale === "number" ? n.finale : null, figeeLe: n.figeeLe || null,
+      externes: n.externes || {}, appreciation: n.appreciation || "",
+    };
+  });
+  // Copie des notes calculées, pour que le prof principal les voie sans accès aux applications de ce collègue.
+  const copie = Object.fromEntries(eleves.map(x => [x.id, x.calculee]));
+  const noms = Object.fromEntries(eleves.map(x => [x.id, `${x.nom} ${x.prenom}`.trim()]));
+  if (b.classeNom && JSON.stringify([b.calculees || {}, b.noms || {}]) !== JSON.stringify([copie, noms])) await ref.set({ calculees: copie, noms, calculeesLe: new Date().toISOString() }, { merge: true });
+  res.json({
+    periodes: per, classes, colonnesDispo, trimestre, classe,
+    colonnes, externes, eleves,
+  });
+}));
+
+app.post("/api/bulletin/colonnes", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const { trimestre, classe } = lireTrimestreClasse(req.body);
+  const colonnes = (Array.isArray(req.body?.colonnes) ? req.body.colonnes : []).slice(0, 100)
+    .map((c: any) => ({ cle: texteCourt(c?.cle, 300), app: texteCourt(c?.app, 80), titre: texteCourt(c?.titre, 200) })).filter((c: any) => c.cle);
+  const externes = (Array.isArray(req.body?.externes) ? req.body.externes : []).slice(0, 20)
+    .map((c: any) => ({ id: texteCourt(c?.id, 40).replace(/[^a-z0-9_-]/gi, ""), titre: texteCourt(c?.titre, 80).trim() })).filter((c: any) => c.id && c.titre);
+  const t = await calculerTableau(e);
+  const classeNom = t.refs.find(r => cleClasse(r.classe) === classe)?.classe || classe;
+  // Nom montré au prof principal : celui du compte Google, sinon celui de l'enseignant dans ses applications.
+  const f = await fiche(e);
+  const nomAppli = Object.values<any>(f.apps || {}).map(a => a?.nomDansAppli).find(Boolean);
+  await db.doc(`bulletins/${idBulletin(e.uid, trimestre, classe)}`).set({
+    uid: e.uid, email: e.email, nom: (e.nom.includes("@") || e.nom === e.email.split("@")[0]) && nomAppli ? nomAppli : e.nom, trimestre, classe, classeNom, colonnes, externes, majLe: new Date().toISOString(),
+  }, { merge: true });
+  res.json({ ok: true });
+}));
+
+// Une ligne d'élève : note définitive (null = revenir à la note calculée), notes externes, appréciation.
+app.post("/api/bulletin/eleve", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const { trimestre, classe } = lireTrimestreClasse(req.body);
+  const refId = texteCourt(req.body?.refId, 200);
+  const t = await calculerTableau(e);
+  if (!elevesDeClasse(t, classe).some(r => r.id === refId)) throw httpError(404, "Cet élève n'est pas dans cette classe.");
+  const ref = db.doc(`bulletins/${idBulletin(e.uid, trimestre, classe)}`);
+  const b = (await ref.get()).data();
+  if (!b) throw httpError(409, "Choisissez d'abord les notes à reprendre.");
+  const maj: any = {};
+  if ("finale" in (req.body || {})) {
+    const n = lireNote(req.body.finale);
+    if (n === undefined) throw httpError(400, "La note doit être entre 0 et 20.");
+    maj.finale = n; maj.figeeLe = n === null ? null : new Date().toISOString();
+  }
+  if (req.body?.externes && typeof req.body.externes === "object") {
+    maj.externes = {};
+    for (const x of b.externes || []) {
+      if (!(x.id in req.body.externes)) continue;
+      const n = lireNote(req.body.externes[x.id]);
+      if (n === undefined) throw httpError(400, `${x.titre} : la note doit être entre 0 et 20.`);
+      maj.externes[x.id] = n;
+    }
+  }
+  if ("appreciation" in (req.body || {})) maj.appreciation = texteCourt(req.body.appreciation, 2000);
+  await ref.set({ eleves: { [refId]: maj }, majLe: new Date().toISOString() }, { merge: true });
+  res.json({ ok: true });
+}));
+
+// Figer : la note calculée de chaque élève devient sa note définitive (celles déjà posées ne changent pas).
+app.post("/api/bulletin/figer", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const { trimestre, classe } = lireTrimestreClasse(req.body);
+  const ref = db.doc(`bulletins/${idBulletin(e.uid, trimestre, classe)}`);
+  const b = (await ref.get()).data();
+  if (!b?.colonnes?.length) throw httpError(409, "Choisissez d'abord les notes à reprendre.");
+  const per = await periodes();
+  const t = await calculerTableau(e);
+  const maj: Record<string, any> = {};
+  const le = new Date().toISOString();
+  for (const r of elevesDeClasse(t, classe)) {
+    if (typeof b.eleves?.[r.id]?.finale === "number") continue;
+    const n = noteSur20(t.essais.get(r.id) || {}, b.colonnes.map((c: any) => c.cle), per[trimestre]);
+    if (n !== null) maj[r.id] = { finale: n, figeeLe: le };
+  }
+  await ref.set({ eleves: maj, majLe: le }, { merge: true });
+  res.json({ ok: true, figees: Object.keys(maj).length });
+}));
+
+// --- Prof principal ---------------------------------------------------------------------------
+app.get("/api/pp", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const snap = await db.collection("classes").where("pp", "array-contains", e.email).get();
+  res.json({ classes: snap.docs.map(d => ({ cle: d.id, nom: String(d.get("nom") || d.id) })).sort((a, b) => a.nom.localeCompare(b.nom, "fr")), periodes: await periodes() });
+}));
+
+app.get("/api/pp/bulletin", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const { trimestre, classe } = lireTrimestreClasse(req.query);
+  const c = (await db.doc(`classes/${classe}`).get()).data();
+  if (!c || !Array.isArray(c.pp) || !c.pp.includes(e.email)) throw httpError(403, "Vous n'êtes pas professeur principal de cette classe.");
+  const snap = await db.collection("bulletins").where("classe", "==", classe).where("trimestre", "==", trimestre).get();
+  const refs = (await elevesReference()).filter(r => cleClasse(r.classe) === classe).sort(parNom);
+  const matieres = snap.docs.map(d => d.data()).sort((a, b) => String(a.nom).localeCompare(String(b.nom), "fr")).map(b => ({
+    enseignant: String(b.nom || b.email), email: String(b.email || ""),
+    externes: Array.isArray(b.externes) ? b.externes : [],
+    notes: Object.fromEntries(Object.entries<any>({ ...(b.calculees || {}), ...(b.eleves || {}) }).map(([id]) => {
+      const n = b.eleves?.[id] || {};
+      return [id, { note: typeof n.finale === "number" ? n.finale : (b.calculees?.[id] ?? null), definitive: typeof n.finale === "number", externes: n.externes || {}, appreciation: n.appreciation || "" }];
+    })),
+  }));
+  // Élèves : la liste de l'établissement ; à défaut, ceux qui ont une note.
+  const nomDe = new Map<string, string>(snap.docs.flatMap(d => Object.entries<string>(d.get("noms") || {})));
+  const ids = refs.length ? refs.map(r => ({ id: r.id, nom: r.nom, prenom: r.prenom }))
+    : Array.from(new Set(matieres.flatMap(m => Object.keys(m.notes)))).map(id => ({ id, nom: nomDe.get(id) || id, prenom: "" }))
+      .sort((a, b) => a.nom.localeCompare(b.nom, "fr"));
+  res.json({
+    classe, nom: c.nom || classe, trimestre, matieres,
+    eleves: ids.map(x => ({ ...x, moyenne: moyenne(matieres.map(m => m.notes[x.id]?.note)) })),
   });
 }));
 
@@ -398,6 +574,37 @@ app.post("/api/admin/eleves", exigerEnseignant(), route(async (req, res) => {
   await w.close();
   cacheRefs = null;
   res.json({ ok: true, nombre: eleves.length, retires: avant.docs.filter(d => !garder.has(d.id)).length });
+}));
+
+// Professeurs principaux et dates des trimestres (administrateur).
+app.get("/api/admin/reglages", exigerEnseignant(), route(async (req, res) => {
+  if (!ensDe(req).isAdmin) throw httpError(403, "Réservé à l'administrateur.");
+  const snap = await db.collection("classes").get();
+  res.json({ periodes: await periodes(), classes: snap.docs.map(d => ({ cle: d.id, nom: String(d.get("nom") || d.id), pp: d.get("pp") || [] })) });
+}));
+
+app.post("/api/admin/pp", exigerEnseignant(), route(async (req, res) => {
+  if (!ensDe(req).isAdmin) throw httpError(403, "Réservé à l'administrateur.");
+  const nom = texteCourt(req.body?.classe, 40).trim();
+  const cle = cleClasse(nom);
+  if (!cle) throw httpError(400, "Classe incorrecte.");
+  const emails = String(req.body?.emails ?? "").split(/[\s,;]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
+  if (emails.some(x => !emailValide(x))) throw httpError(400, "Adresse e-mail incorrecte.");
+  if (!emails.length) await db.doc(`classes/${cle}`).delete();
+  else await db.doc(`classes/${cle}`).set({ nom, pp: emails.slice(0, 5) });
+  res.json({ ok: true });
+}));
+
+app.post("/api/admin/trimestres", exigerEnseignant(), route(async (req, res) => {
+  if (!ensDe(req).isAdmin) throw httpError(403, "Réservé à l'administrateur.");
+  const p: any = {};
+  for (const t of TRIMESTRES) {
+    const x = req.body?.[t];
+    if (!dateValide(x?.debut) || !dateValide(x?.fin) || x.debut > x.fin) throw httpError(400, `${t} : dates incorrectes.`);
+    p[t] = { debut: x.debut, fin: x.fin };
+  }
+  await db.doc("reglages/trimestres").set(p);
+  res.json({ ok: true });
 }));
 
 // --- Pages ---------------------------------------------------------------------------------

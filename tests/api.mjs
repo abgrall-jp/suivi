@@ -15,7 +15,7 @@ let ok = 0, ko = 0;
 const t = (n, c, x) => { if (c) { ok++; console.log('  ok  ', n); } else { ko++; console.log('  ÉCHEC', n, x !== undefined ? JSON.stringify(x).slice(0, 600) : ''); } };
 
 // Base de Suivi vide au départ.
-for (const c of ['enseignants', 'eleves', 'correspondances', 'codes']) { const s = await db.collection(c).get(); await Promise.all(s.docs.map(d => d.ref.delete())); }
+for (const c of ['enseignants', 'eleves', 'correspondances', 'codes', 'bulletins', 'classes', 'reglages']) { const s = await db.collection(c).get(); await Promise.all(s.docs.map(d => d.ref.delete())); }
 
 async function compte(email, verifie = true) {
   try { const u = await getAuth(adm).getUserByEmail(email); await getAuth(adm).deleteUser(u.uid); } catch {}
@@ -97,6 +97,51 @@ t('élève inconnu de la liste : refusé', (await jean('/api/correspondances', {
 tab = (await jean('/api/tableau')).data;
 t('Bob : Mémoriser 0 % et Texte à trous 70 %', tab.eleves.find(e => e.id === '5b_leroy_bob')?.resultats['textetrous:ex1']?.percent === 70 && tab.eleves.find(e => e.id === '5b_leroy_bob')?.resultats['memoriser:deck_verbes']?.percent === 0);
 t('Chloé (sans compte dans les applications) absente du tableau', !tab.eleves.some(e => e.prenom === 'Chloé'));
+
+console.log('Bulletin (1er trimestre, 5e B)');
+let bu = (await jean('/api/bulletin')).data;
+t('classe proposée : 5e B', JSON.stringify(bu.classes) === '[{"cle":"5b","nom":"5B"}]', bu.classes);
+t('deux colonnes proposées', bu.colonnesDispo?.length === 2, bu.colonnesDispo);
+t('trimestres de l’année', bu.periodes?.T1?.debut === '2026-09-01');
+t('note avant de choisir les colonnes : refus clair', (await jean('/api/bulletin/eleve', { trimestre: 'T1', classe: '5B', refId: '5b_durand_alice', finale: 12 })).status === 409);
+t('trimestre incorrect : refusé', (await jean('/api/bulletin?trimestre=T4&classe=5B')).status === 400);
+await jean('/api/bulletin/colonnes', { trimestre: 'T1', classe: '5e B', colonnes: bu.colonnesDispo, externes: [{ id: 'oral', titre: 'Oral' }] });
+bu = (await jean('/api/bulletin?trimestre=T1&classe=5B')).data;
+const ligne = (id) => bu.eleves.find(e => e.id === id);
+t('Alice : (50 % + 90 %) / 2 = 14 / 20', ligne('5b_durand_alice')?.calculee === 14, bu.eleves);
+t('Bob : (0 % + 70 %) / 2 = 7 / 20', ligne('5b_leroy_bob')?.calculee === 7);
+t('Chloé (aucun résultat) : dans le bulletin, sans note', ligne('5b_petit_chloe')?.calculee === null);
+t('2e trimestre : pas encore de note', (await jean('/api/bulletin/colonnes', { trimestre: 'T2', classe: '5B', colonnes: bu.colonnesDispo })).status === 200 && (await jean('/api/bulletin?trimestre=T2&classe=5B')).data.eleves.every(e => e.calculee === null));
+t('note définitive saisie avec une virgule', (await jean('/api/bulletin/eleve', { trimestre: 'T1', classe: '5B', refId: '5b_durand_alice', finale: '15,5', externes: { oral: '12' }, appreciation: 'Très bon trimestre.' })).status === 200);
+t('note hors barème : refusée', (await jean('/api/bulletin/eleve', { trimestre: 'T1', classe: '5B', refId: '5b_durand_alice', finale: 25 })).status === 400);
+t('élève d’une autre classe : refusé', (await jean('/api/bulletin/eleve', { trimestre: 'T1', classe: '4A', refId: '5b_durand_alice', finale: 12 })).status === 404);
+const fig = await jean('/api/bulletin/figer', { trimestre: 'T1', classe: '5B' });
+t('figer : seule la note de Bob est posée (Chloé n’a pas de note)', fig.data.figees === 1, fig.data);
+bu = (await jean('/api/bulletin?trimestre=T1&classe=5B')).data;
+t('Alice garde 15,5, l’oral et l’appréciation', ligne('5b_durand_alice').finale === 15.5 && ligne('5b_durand_alice').externes.oral === 12 && ligne('5b_durand_alice').appreciation === 'Très bon trimestre.', ligne('5b_durand_alice'));
+t('Bob : note figée à 7', ligne('5b_leroy_bob').finale === 7 && !!ligne('5b_leroy_bob').figeeLe);
+await jean('/api/bulletin/eleve', { trimestre: 'T1', classe: '5B', refId: '5b_leroy_bob', finale: null });
+bu = (await jean('/api/bulletin?trimestre=T1&classe=5B')).data;
+t('note effacée : retour à la note calculée', ligne('5b_leroy_bob').finale === null && ligne('5b_leroy_bob').calculee === 7);
+await jean('/api/bulletin/eleve', { trimestre: 'T1', classe: '5B', refId: '5b_leroy_bob', finale: 8 });
+
+console.log('Prof principal');
+t('pas encore prof principal : refusé', (await marie('/api/pp/bulletin?trimestre=T1&classe=5B')).status === 403);
+t('non administrateur : ne peut pas nommer', (await jean('/api/admin/pp', { classe: '5e B', emails: 'jean@ecole.fr' })).status === 403);
+t('administrateur nomme Marie pour la 5e B', (await admin('/api/admin/pp', { classe: '5e B', emails: 'marie@ecole.fr' })).status === 200);
+t('Marie voit sa classe', JSON.stringify((await marie('/api/pp')).data.classes) === '[{"cle":"5b","nom":"5e B"}]');
+const pp = (await marie('/api/pp/bulletin?trimestre=T1&classe=5B')).data;
+const mJean = pp.matieres?.find(m => m.email === 'jean@ecole.fr');
+t('Marie voit les notes de Jean', mJean?.notes['5b_durand_alice']?.note === 15.5 && mJean.notes['5b_durand_alice'].definitive && mJean.notes['5b_leroy_bob'].note === 8, pp);
+t('… avec l’oral et l’appréciation', mJean?.notes['5b_durand_alice']?.externes?.oral === 12 && mJean.notes['5b_durand_alice'].appreciation === 'Très bon trimestre.');
+t('moyenne générale', pp.eleves?.find(e => e.id === '5b_durand_alice')?.moyenne === 15.5 && pp.eleves.find(e => e.id === '5b_petit_chloe')?.moyenne === null);
+t('Marie ne peut pas modifier les notes de Jean', (await marie('/api/bulletin/eleve', { trimestre: 'T1', classe: '5B', refId: '5b_durand_alice', finale: 2 })).status !== 200 && (await marie('/api/pp/bulletin?trimestre=T1&classe=5B')).data.matieres.find(m => m.email === 'jean@ecole.fr').notes['5b_durand_alice'].note === 15.5);
+t('Jean n’est pas prof principal', (await jean('/api/pp/bulletin?trimestre=T1&classe=5B')).status === 403);
+t('dates de trimestre incorrectes : refusées', (await admin('/api/admin/trimestres', { T1: { debut: '2026-12-01', fin: '2026-09-01' } })).status === 400);
+t('dates de trimestre enregistrées', (await admin('/api/admin/trimestres', { T1: { debut: '2026-09-01', fin: '2026-10-02' }, T2: { debut: '2026-10-03', fin: '2027-02-28' }, T3: { debut: '2027-03-01', fin: '2027-07-04' } })).status === 200);
+bu = (await jean('/api/bulletin?trimestre=T1&classe=5B')).data;
+t('nouvelles dates (fin le 2 oct.) : Alice n’a plus que son 1er essai de Texte à trous, 40 % = 8 / 20', ligne('5b_durand_alice').calculee === 8, ligne('5b_durand_alice'));
+await db.doc('reglages/trimestres').delete();
 
 console.log('Délier');
 await jean('/api/apps/retirer', { app: 'textetrous' });

@@ -10,9 +10,9 @@ const donnees = {
   ],
   exercises: [{ id: 'ex1', title: 'Le présent' }, { id: 'ex2', title: 'Sans résultat' }],
   results: [
-    { id: 'r1', studentId: 's1', exerciseId: 'ex1', exerciseTitle: 'Le présent', percent: 40, score: '4/10', completedAt: 1000 },
-    { id: 'r2', studentId: 's1', exerciseId: 'ex1', exerciseTitle: 'Le présent', percent: 90, score: '9/10', completedAt: 2000 },
-    { id: 'r3', studentId: 's2', exerciseId: 'ex1', exerciseTitle: 'Le présent', percent: 70, score: '7/10', completedAt: 1500 },
+    { id: 'r1', studentId: 's1', exerciseId: 'ex1', exerciseTitle: 'Le présent', percent: 40, score: '4/10', completedAt: Date.parse('2026-10-01T10:00:00Z') },
+    { id: 'r2', studentId: 's1', exerciseId: 'ex1', exerciseTitle: 'Le présent', percent: 90, score: '9/10', completedAt: Date.parse('2026-10-05T10:00:00Z') },
+    { id: 'r3', studentId: 's2', exerciseId: 'ex1', exerciseTitle: 'Le présent', percent: 70, score: '7/10', completedAt: Date.parse('2026-10-03T10:00:00Z') },
   ],
 };
 http.createServer((req, res) => {

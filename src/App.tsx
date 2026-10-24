@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, connexionEmail, connexionGoogle, deconnexion, inscriptionEmail, motDePasseOublie } from "./firebase.ts";
 import { api, type Correspondances, type Moi, type Tableau } from "./api.ts";
+import { ReglagesAdmin, VueBulletin, VueProfPrincipal } from "./Bulletin.tsx";
 
-type Onglet = "tableau" | "applications" | "correspondances" | "eleves";
+type Onglet = "tableau" | "bulletin" | "pp" | "applications" | "correspondances" | "eleves";
 
 const messageAuth = (e: any) => {
   const code = String(e?.code || "");
@@ -20,6 +21,7 @@ export default function App() {
   const [erreur, setErreur] = useState("");
   const [onglet, setOnglet] = useState<Onglet>("tableau");
   const [aVerifier, setAVerifier] = useState(0);
+  const [pp, setPp] = useState<{ classes: { cle: string; nom: string }[]; periodes: any } | null>(null);
 
   useEffect(() => onAuthStateChanged(auth, u => { setUser(u); setMoi(null); setErreur(""); }), []);
 
@@ -27,6 +29,7 @@ export default function App() {
     try { setMoi(await api<Moi>("/api/moi")); setErreur(""); } catch (e: any) { setErreur(e.message); }
   }, []);
   useEffect(() => { if (user) chargerMoi(); }, [user, chargerMoi]);
+  useEffect(() => { if (moi?.choisies) api("/api/pp").then(setPp).catch(() => setPp(null)); }, [moi?.email, moi?.choisies]);
 
   if (user === undefined) return <div className="centre">Chargement…</div>;
   if (!user) return <Connexion />;
@@ -46,16 +49,20 @@ export default function App() {
         <strong>Suivi</strong>
         <nav>
           <button className={onglet === "tableau" ? "actif" : ""} onClick={() => setOnglet("tableau")}>Tableau</button>
+          <button className={onglet === "bulletin" ? "actif" : ""} onClick={() => setOnglet("bulletin")}>Bulletin</button>
+          {!!pp?.classes.length && <button className={onglet === "pp" ? "actif" : ""} onClick={() => setOnglet("pp")}>Prof principal</button>}
           <button className={onglet === "applications" ? "actif" : ""} onClick={() => setOnglet("applications")}>Mes applications</button>
           <button className={onglet === "correspondances" ? "actif" : ""} onClick={() => setOnglet("correspondances")}>
             Noms des élèves{aVerifier > 0 && <span className="pastille">{aVerifier}</span>}
           </button>
-          {moi.isAdmin && <button className={onglet === "eleves" ? "actif" : ""} onClick={() => setOnglet("eleves")}>Liste de l'établissement</button>}
+          {moi.isAdmin && <button className={onglet === "eleves" ? "actif" : ""} onClick={() => setOnglet("eleves")}>Établissement</button>}
         </nav>
         <span className="moi">{moi.email} <button className="lien" onClick={deconnexion}>Déconnexion</button></span>
       </header>
       <main>
         {onglet === "tableau" && <VueTableau moi={moi} onAVerifier={setAVerifier} allerA={setOnglet} />}
+        {onglet === "bulletin" && <VueBulletin />}
+        {onglet === "pp" && pp && <VueProfPrincipal classes={pp.classes} periodes={pp.periodes} />}
         {onglet === "applications" && <MesApplications moi={moi} onChange={chargerMoi} />}
         {onglet === "correspondances" && <VueCorrespondances onChange={setAVerifier} />}
         {onglet === "eleves" && moi.isAdmin && <ListeEtablissement />}
@@ -400,6 +407,7 @@ function ListeEtablissement() {
       }}>Importer la liste</button>
       {msg && <p className="erreur pre">{msg}</p>}
       {info && <p className="info">{info}</p>}
+      <ReglagesAdmin />
     </section>
   );
 }
