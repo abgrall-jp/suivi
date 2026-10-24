@@ -15,6 +15,7 @@ let ok = 0, ko = 0;
 const t = (n, c, x) => { if (c) { ok++; console.log('  ok  ', n); } else { ko++; console.log('  ÉCHEC', n, x !== undefined ? JSON.stringify(x).slice(0, 600) : ''); } };
 
 // Base de Suivi vide au départ.
+for (const d of (await getFirestore(adm, 'ai-studio-plandeclasseia-81a53100-2107-4731-87b5-73225b704ef0').collection('publishedPlans').get()).docs) await d.ref.delete();
 for (const c of ['enseignants', 'eleves', 'correspondances', 'codes', 'bulletins', 'classes', 'reglages', 'parents']) { const s = await db.collection(c).get(); await Promise.all(s.docs.map(d => d.ref.delete())); }
 
 async function compte(email, verifie = true) {
@@ -134,6 +135,17 @@ const ligne = (id) => bu.eleves.find(e => e.id === id);
 t('appréciation du Studio proposée pour Alice', ligne('5b_durand_alice')?.studio?.prof === 'Alice participe beaucoup.', ligne('5b_durand_alice'));
 t('appréciation écrite par Alice elle-même', ligne('5b_durand_alice')?.studio?.eleve === 'Je dois relire mes leçons.');
 t('appréciation d’un autre enseignant : pas montrée', !ligne('5b_leroy_bob')?.studio?.prof);
+// Plan de classe IA : autre projet, lu directement ; l'enseignant est reconnu par son adresse.
+const pdc = getFirestore(adm, 'ai-studio-plandeclasseia-81a53100-2107-4731-87b5-73225b704ef0');
+await pdc.doc('publishedPlans/plan_jean').set({ teacherEmail: 'Jean@Ecole.fr', teacherName: 'M. Martin', className: '5e B', placements: [{ id: 1, name: 'Alice Durand', photoUrl: 'data:lourd' }],
+  studentRemarks: { 'alice durand': [{ studentName: 'Alice Durand', date: '2026-10-02', sessionNumber: '3', text: 'Bavarde en fin d’heure.' }, { studentName: 'Alice Durand', date: '2027-01-10', text: '2e trimestre' }] } });
+await pdc.doc('publishedPlans/plan_autre').set({ teacherEmail: 'autre@ecole.fr', className: '5e B', studentRemarks: { b: [{ studentName: 'Bob Leroy', date: '2026-10-02', text: 'Pas à Jean' }] } });
+t('Plan de classe : adresse sans plan publié, refus clair', (await marie('/api/apps/relier', { app: 'planclasse' })).status === 404);
+const rp = await jean('/api/apps/relier', { app: 'planclasse' });
+t('Plan de classe relié avec l’adresse de Jean', rp.status === 200 && rp.data.nom === 'M. Martin', rp);
+bu = (await jean('/api/bulletin?trimestre=T1&classe=5B')).data;
+t('remarque du 1er trimestre reprise pour Alice', JSON.stringify(ligne('5b_durand_alice')?.remarques) === JSON.stringify([{ date: '2026-10-02', seance: 'Séance 3', texte: 'Bavarde en fin d’heure.' }]), ligne('5b_durand_alice'));
+t('remarque d’un autre enseignant : pas montrée', !ligne('5b_leroy_bob')?.remarques?.length);
 t('le tableau n’est pas gêné par le Studio', (await jean('/api/tableau')).data.applications.every(a => a.id !== 'appreciations'));
 t('Alice : (50 % + 90 %) / 2 = 14 / 20', ligne('5b_durand_alice')?.calculee === 14, bu.eleves);
 t('Bob : (0 % + 70 %) / 2 = 7 / 20', ligne('5b_leroy_bob')?.calculee === 7);

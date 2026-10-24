@@ -10,6 +10,7 @@ import { cleClasse, decider, lireListe, normaliser, type EleveRef } from "./lib/
 import { APPLICATIONS, type Application } from "./lib/applications.ts";
 import { empreinte, genererMotDePasse } from "./lib/parents.ts";
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
+import { plansDe, remarquesParEleve, type PlanPublie, type RemarqueEleve } from "./lib/planclasse.ts";
 import { dateValide, estTrimestre, lireNote, moyenne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
 
 // ---------------------------------------------------------------------------
@@ -25,6 +26,8 @@ import { dateValide, estTrimestre, lireNote, moyenne, noteSur20, periodesParDefa
 //   SUIVI_URL_<APPLI>         adresse d'une application, si elle diffère de l'adresse prévue
 //   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_FROM  envoi des e-mails (codes de confirmation, mots de passe des parents)
 //   STUDIO_FIRESTORE_DATABASE_ID  base du Studio d'Appréciations (même projet Google que Suivi)
+//   FIREBASE_SERVICE_ACCOUNT_PLANCLASSE  clé JSON d'un compte de service du projet du Plan de classe IA (gen-lang-client-0301284188)
+//   PLANCLASSE_DATABASE_ID    base du Plan de classe IA (sinon ai-studio-plandeclasseia-…)
 //   ADRESSE_PUBLIQUE          adresse de Suivi dans les e-mails (sinon https://suivi.jepeuxapprendre.fr)
 // ---------------------------------------------------------------------------
 
@@ -55,6 +58,25 @@ db.settings({ ignoreUndefinedProperties: true });
 // Le Studio d'Appréciations partage le projet Google de Suivi : ses appréciations sont lues directement dans sa base.
 const studioDb = getFirestore(adminApp, process.env.STUDIO_FIRESTORE_DATABASE_ID || "ai-studio-f415485f-4d6c-4b39-a9de-42a310ca2292");
 
+// Le Plan de classe IA est dans un autre projet Google : un compte de service à part, en lecture seulement.
+const comptePdc = process.env.FIREBASE_SERVICE_ACCOUNT_PLANCLASSE
+  ? (() => { try { return JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_PLANCLASSE!); } catch { console.error("FIREBASE_SERVICE_ACCOUNT_PLANCLASSE n'est pas un JSON valide"); return null; } })()
+  : null;
+const projetPdc = comptePdc?.project_id || process.env.PLANCLASSE_PROJECT_ID; // PLANCLASSE_PROJECT_ID : essais avec les émulateurs
+const pdcDb = projetPdc
+  ? getFirestore(initializeApp({ projectId: projetPdc, ...(comptePdc ? { credential: cert(comptePdc) } : {}) }, "planclasse"),
+    process.env.PLANCLASSE_DATABASE_ID || "ai-studio-plandeclasseia-81a53100-2107-4731-87b5-73225b704ef0")
+  : null;
+let cachePlans: { at: number; plans: PlanPublie[] } | null = null;
+async function plansPublies(): Promise<PlanPublie[]> {
+  if (!pdcDb) return [];
+  if (cachePlans && Date.now() - cachePlans.at < 20000) return cachePlans.plans;
+  // Sans les placements ni les photos, qui peuvent être lourds.
+  const snap = await pdcDb.collection("publishedPlans").select("teacherEmail", "teacherName", "className", "studentRemarks").get();
+  cachePlans = { at: Date.now(), plans: snap.docs.map(d => d.data() as PlanPublie) };
+  return cachePlans.plans;
+}
+
 const ADMIN_EMAILS = String(process.env.ADMIN_EMAILS ?? "alimatlea@gmail.com").split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
 
 // --- Applications du site ------------------------------------------------------------
@@ -63,7 +85,7 @@ const cleDe = (a: Application) => varApp("SUIVI_CLE", a);
 const urlDe = (a: Application) => (varApp("SUIVI_URL", a) || a.url).replace(/\/+$/, "");
 const appParId = (id: unknown) => APPLICATIONS.find(a => a.id === id);
 const parPorte = (a: Application) => (a.lecture || "porte") === "porte";
-const estPrete = (a: Application) => (parPorte(a) ? !!cleDe(a) : true);
+const estPrete = (a: Application) => (parPorte(a) ? !!cleDe(a) : a.lecture === "planclasse" ? !!pdcDb : true);
 
 /** Appel de la porte de liaison d'une application. */
 async function porte(a: Application, chemin: string, body?: any): Promise<any> {
@@ -302,7 +324,14 @@ app.post("/api/apps/relier", exigerEnseignant(), route(async (req, res) => {
     await ref.delete();
   }
   // Studio d'Appréciations : même compte que Suivi, rien à vérifier ailleurs.
-  const r = parPorte(a) ? await porte(a, `/api/suivi/enseignant?email=${encodeURIComponent(email)}`) : { teacher: { name: e.nom } };
+  let r: any;
+  if (parPorte(a)) r = await porte(a, `/api/suivi/enseignant?email=${encodeURIComponent(email)}`);
+  else if (a.lecture === "planclasse") {
+    if (!pdcDb) throw httpError(409, `${a.nom} n'est pas encore reliée à Suivi.`);
+    const plan = plansDe(await plansPublies(), email)[0] as any;
+    r = { teacher: plan ? { name: plan.teacherName || "" } : null };
+    if (!plan) throw httpError(404, `Aucun plan de classe publié avec l'adresse ${email} dans ${a.nom}.`);
+  } else r = { teacher: { name: e.nom } };
   if (!r.teacher) throw httpError(404, `Aucun compte enseignant avec l'adresse ${email} dans ${a.nom}.`);
   await fiche(e);
   await db.doc(`enseignants/${e.uid}`).set({
@@ -434,6 +463,10 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
       studio = textesParEleve(snap.docs.map(d => d.data()), trimestre, refsClasse);
     } catch (err) { console.error("Lecture du Studio d'Appréciations :", err); }
   }
+  let remarques = new Map<string, RemarqueEleve[]>();
+  if (f.apps?.planclasse?.email && pdcDb) {
+    try { remarques = remarquesParEleve(plansDe(await plansPublies(), f.apps.planclasse.email), per[trimestre], refsClasse); } catch (err) { console.error("Lecture du Plan de classe IA :", err); }
+  }
   const eleves = refsClasse.map(r => {
     const n = notes[r.id] || {};
     const calculee = colonnes.length ? noteSur20(t.essais.get(r.id) || {}, colonnes.map(c => c.cle), per[trimestre]) : null;
@@ -442,6 +475,7 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
       finale: typeof n.finale === "number" ? n.finale : null, figeeLe: n.figeeLe || null,
       externes: n.externes || {}, appreciation: n.appreciation || "",
       studio: { eleve: studio.get(r.id)?.eleve?.texte || "", prof: studio.get(r.id)?.prof?.texte || "" },
+      remarques: remarques.get(r.id) || [],
     };
   });
   // Copie des notes calculées, pour que le prof principal les voie sans accès aux applications de ce collègue.

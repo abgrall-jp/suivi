@@ -8,6 +8,7 @@ type Externe = { id: string; titre: string };
 type LigneBulletin = {
   id: string; nom: string; prenom: string; calculee: number | null; finale: number | null; figeeLe: string | null;
   externes: Record<string, number | null>; appreciation: string; studio?: { eleve: string; prof: string };
+  remarques?: { date: string; seance: string; texte: string }[];
 };
 type Bulletin = {
   periodes: Periodes; classes: { cle: string; nom: string }[]; colonnesDispo: Colonne[];
@@ -125,6 +126,12 @@ export function VueBulletin() {
                         <div className="studio"><span>Studio : {e.studio.prof}</span> <button className="lien" onClick={() => enregistrer(e.id, { appreciation: e.studio!.prof })}>Reprendre</button></div>
                       )}
                       {!!e.studio?.eleve && <div className="studio eleve">L'élève : {e.studio.eleve}</div>}
+                      {!!e.remarques?.length && (
+                        <details className="studio">
+                          <summary>Plan de classe : {e.remarques.length} remarque{e.remarques.length > 1 ? "s" : ""}</summary>
+                          <ul>{e.remarques.map((r, i) => <li key={i}><strong>{new Date(`${r.date}T12:00:00`).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}</strong>{r.seance ? ` (${r.seance})` : ""} : {r.texte}</li>)}</ul>
+                        </details>
+                      )}
                     </td>
                   </tr>
                 ))}

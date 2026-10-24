@@ -2,8 +2,9 @@
 // « eleves » : l'application enregistre des élèves et des résultats, repris dans le tableau.
 // Les autres sont des outils pour l'enseignant (page Activité, plus tard).
 // « lecture » : par la porte de liaison de l'application (par défaut), ou directement dans la base du Studio d'Appréciations,
-// qui partage le projet Google de Suivi (mêmes comptes enseignants, aucune clé à régler).
-export type Application = { id: string; code: string; nom: string; url: string; eleves: boolean; lecture?: "porte" | "studio" };
+// qui partage le projet Google de Suivi (mêmes comptes enseignants, aucune clé à régler), ou dans la base du Plan de classe IA
+// (autre projet Google : compte de service à part, enseignant reconnu par son adresse e-mail).
+export type Application = { id: string; code: string; nom: string; url: string; eleves: boolean; lecture?: "porte" | "studio" | "planclasse" };
 
 export const APPLICATIONS: Application[] = [
   { id: "sequenceur", code: "SEQ", nom: "Séquenceur", url: "https://sequenceur.jepeuxapprendre.fr", eleves: true },
@@ -14,7 +15,7 @@ export const APPLICATIONS: Application[] = [
   { id: "memoriser", code: "MEM", nom: "Mémoriser c'est facile", url: "https://memoriser.jepeuxapprendre.fr", eleves: true },
   { id: "motscroises", code: "MCR", nom: "Mots croisés", url: "https://motscroises.jepeuxapprendre.fr", eleves: true },
   { id: "textetrous", code: "TAT", nom: "Texte à trous", url: "https://textetrous.jepeuxapprendre.fr", eleves: true },
-  { id: "planclasse", code: "PDC", nom: "Plan de classe IA", url: "https://planclasse.jepeuxapprendre.fr", eleves: true },
+  { id: "planclasse", code: "PDC", nom: "Plan de classe IA", url: "https://planclasse.jepeuxapprendre.fr", eleves: true, lecture: "planclasse" },
   { id: "appreciations", code: "APP", nom: "Studio d'Appréciations", url: "https://appreciations.jepeuxapprendre.fr", eleves: true, lecture: "studio" },
   { id: "quiz", code: "QUIZ", nom: "Quiz IA", url: "https://quiz.jepeuxapprendre.fr", eleves: true },
   { id: "conception", code: "CNC", nom: "Assistant Conception Pédagogique", url: "https://conception.jepeuxapprendre.fr", eleves: false },
