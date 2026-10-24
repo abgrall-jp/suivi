@@ -15,12 +15,22 @@ const donnees = {
     { id: 'r3', studentId: 's2', exerciseId: 'ex1', exerciseTitle: 'Le présent', percent: 70, score: '7/10', completedAt: Date.parse('2026-10-03T10:00:00Z') },
   ],
 };
-http.createServer((req, res) => {
+const parents = {};
+http.createServer(async (req, res) => {
+  let corps = '';
+  for await (const c of req) corps += c;
   const u = new URL(req.url, 'http://x');
   const json = (s, d) => { res.writeHead(s, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(d)); };
   if (req.headers['x-suivi-cle'] !== 'cle-tat') return json(401, { error: 'Clé refusée.' });
   const email = (u.searchParams.get('email') || '').toLowerCase();
   if (u.pathname === '/api/suivi/enseignant') return json(200, { teacher: ['jean@ecole.fr', 'autre@ecole.fr'].includes(email) ? donnees.teacher : null });
   if (u.pathname === '/api/suivi/donnees') return email === 'jean@ecole.fr' || email === 'autre@ecole.fr' ? json(200, donnees) : json(404, { error: 'Inconnu' });
+  if (u.pathname === '/api/suivi/mot-de-passe-parent' && req.method === 'POST') {
+    const b = JSON.parse(corps || '{}');
+    if (!donnees.students.some(x => x.id === b.studentId)) return json(404, { error: 'Élève introuvable' });
+    parents[`${b.studentId}_${b.parent}`] = b.empreinte;
+    return json(200, { ok: true });
+  }
+  if (u.pathname === '/essai/parents') return json(200, parents);
   json(404, { error: 'nope' });
 }).listen(3201, '127.0.0.1');

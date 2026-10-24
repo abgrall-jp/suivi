@@ -3,8 +3,9 @@ import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, connexionEmail, connexionGoogle, deconnexion, inscriptionEmail, motDePasseOublie } from "./firebase.ts";
 import { api, type Correspondances, type Moi, type Tableau } from "./api.ts";
 import { ReglagesAdmin, VueBulletin, VueProfPrincipal } from "./Bulletin.tsx";
+import { ParentsOubli, VueParents } from "./Parents.tsx";
 
-type Onglet = "tableau" | "bulletin" | "pp" | "applications" | "correspondances" | "eleves";
+type Onglet = "tableau" | "bulletin" | "pp" | "parents" | "applications" | "correspondances" | "eleves";
 
 const messageAuth = (e: any) => {
   const code = String(e?.code || "");
@@ -16,12 +17,18 @@ const messageAuth = (e: any) => {
 };
 
 export default function App() {
+  // Page publique pour les parents : pas de connexion.
+  if (location.pathname.replace(/\/+$/, "") === "/parents") return <ParentsOubli />;
+  return <Enseignants />;
+}
+
+function Enseignants() {
   const [user, setUser] = useState<User | null | undefined>(undefined);
   const [moi, setMoi] = useState<Moi | null>(null);
   const [erreur, setErreur] = useState("");
   const [onglet, setOnglet] = useState<Onglet>("tableau");
   const [aVerifier, setAVerifier] = useState(0);
-  const [pp, setPp] = useState<{ classes: { cle: string; nom: string }[]; periodes: any } | null>(null);
+  const [pp, setPp] = useState<{ classes: { cle: string; nom: string }[]; gerees: { cle: string; nom: string }[]; periodes: any } | null>(null);
 
   useEffect(() => onAuthStateChanged(auth, u => { setUser(u); setMoi(null); setErreur(""); }), []);
 
@@ -51,6 +58,7 @@ export default function App() {
           <button className={onglet === "tableau" ? "actif" : ""} onClick={() => setOnglet("tableau")}>Tableau</button>
           <button className={onglet === "bulletin" ? "actif" : ""} onClick={() => setOnglet("bulletin")}>Bulletin</button>
           {!!pp?.classes.length && <button className={onglet === "pp" ? "actif" : ""} onClick={() => setOnglet("pp")}>Prof principal</button>}
+          {!!pp?.gerees.length && <button className={onglet === "parents" ? "actif" : ""} onClick={() => setOnglet("parents")}>Parents</button>}
           <button className={onglet === "applications" ? "actif" : ""} onClick={() => setOnglet("applications")}>Mes applications</button>
           <button className={onglet === "correspondances" ? "actif" : ""} onClick={() => setOnglet("correspondances")}>
             Noms des élèves{aVerifier > 0 && <span className="pastille">{aVerifier}</span>}
@@ -63,6 +71,7 @@ export default function App() {
         {onglet === "tableau" && <VueTableau moi={moi} onAVerifier={setAVerifier} allerA={setOnglet} />}
         {onglet === "bulletin" && <VueBulletin />}
         {onglet === "pp" && pp && <VueProfPrincipal classes={pp.classes} periodes={pp.periodes} />}
+        {onglet === "parents" && pp && <VueParents classes={pp.gerees} />}
         {onglet === "applications" && <MesApplications moi={moi} onChange={chargerMoi} />}
         {onglet === "correspondances" && <VueCorrespondances onChange={setAVerifier} />}
         {onglet === "eleves" && moi.isAdmin && <ListeEtablissement />}
@@ -395,9 +404,9 @@ function ListeEtablissement() {
     <section>
       <h2>Liste des élèves de l'établissement</h2>
       <p>{nombre === null ? "…" : `${nombre} élève${nombre > 1 ? "s" : ""} dans la liste.`} C'est la liste de référence : tous les noms des applications y sont rapprochés.</p>
-      <p className="petit">Collez les colonnes Classe, Nom, Prénom depuis le tableur de l'établissement, ou choisissez un fichier CSV. La nouvelle liste remplace l'ancienne.</p>
+      <p className="petit">Collez les colonnes Classe, Nom, Prénom (et, si vous les avez, les e-mails des deux parents) depuis le tableur de l'établissement, ou choisissez un fichier CSV. La nouvelle liste remplace l'ancienne.</p>
       <input type="file" accept=".csv,.txt" onChange={async e => { const f = e.target.files?.[0]; if (f) setTexte(await f.text()); }} />
-      <textarea rows={12} value={texte} onChange={e => setTexte(e.target.value)} placeholder={"Classe;Nom;Prénom\n5A;MARTIN;Léa\n5A;DUBOIS;Hugo"} />
+      <textarea rows={12} value={texte} onChange={e => setTexte(e.target.value)} placeholder={"Classe;Nom;Prénom;E-mail parent 1;E-mail parent 2\n5A;MARTIN;Léa;papa.martin@mail.fr;maman.martin@mail.fr\n5A;DUBOIS;Hugo;parent.dubois@mail.fr"} />
       <button className="principal" disabled={!texte.trim()} onClick={async () => {
         setMsg(""); setInfo("");
         try {

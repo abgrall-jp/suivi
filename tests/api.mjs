@@ -15,7 +15,7 @@ let ok = 0, ko = 0;
 const t = (n, c, x) => { if (c) { ok++; console.log('  ok  ', n); } else { ko++; console.log('  ÉCHEC', n, x !== undefined ? JSON.stringify(x).slice(0, 600) : ''); } };
 
 // Base de Suivi vide au départ.
-for (const c of ['enseignants', 'eleves', 'correspondances', 'codes', 'bulletins', 'classes', 'reglages']) { const s = await db.collection(c).get(); await Promise.all(s.docs.map(d => d.ref.delete())); }
+for (const c of ['enseignants', 'eleves', 'correspondances', 'codes', 'bulletins', 'classes', 'reglages', 'parents']) { const s = await db.collection(c).get(); await Promise.all(s.docs.map(d => d.ref.delete())); }
 
 async function compte(email, verifie = true) {
   try { const u = await getAuth(adm).getUserByEmail(email); await getAuth(adm).deleteUser(u.uid); } catch {}
@@ -24,6 +24,13 @@ async function compte(email, verifie = true) {
   const r = await fetch(`${AUTH}/accounts:signInWithPassword?key=x`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: 'secret12', returnSecureToken: true }) }).then(r => r.json());
   return r.idToken;
 }
+import fs from 'fs';
+const mails = () => { try { return fs.readFileSync('/home/user/tests-suivi/mails.jsonl', 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)); } catch { return []; } };
+const dernierMail = (a) => mails().filter(m => m.to?.[0]?.address === a).at(-1);
+const motDePasseDe = (m) => /\n {4}(\S+)\n/.exec(m?.text || '')?.[1];
+const MEM = 'http://127.0.0.1:3100';
+const loginParent = async (pin, ip) => (await fetch(MEM + '/api/auth/student-login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip }, body: JSON.stringify({ studentId: 'st_bob', pin, role: 'parent' }) })).status;
+const parentsTat = async () => (await fetch('http://127.0.0.1:3201/essai/parents', { headers: { 'X-Suivi-Cle': 'cle-tat' } })).json();
 const appel = (jeton) => async (chemin, body) => {
   const r = await fetch(B + chemin, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(jeton ? { Authorization: `Bearer ${jeton}` } : {}) }, body: body ? JSON.stringify(body) : undefined });
   let data = {}; try { data = await r.json(); } catch {}
@@ -48,7 +55,14 @@ t('Mémoriser reliée avec l’adresse de connexion', rm.status === 200 && rm.da
 const rt = await jean('/api/apps/relier', { app: 'textetrous' });
 t('Texte à trous reliée et ajoutée aux choix', rt.status === 200 && (await jean('/api/moi')).data.choisies.includes('textetrous'), rt);
 t('autre adresse sans code : refusée', (await jean('/api/apps/relier', { app: 'textetrous', email: 'autre@ecole.fr', code: '123456' })).status === 403);
-t('code sans serveur de mails : refus clair', (await jean('/api/apps/code', { app: 'textetrous', email: 'autre@ecole.fr' })).status === 503);
+t('code envoyé à l’autre adresse', (await jean('/api/apps/code', { app: 'textetrous', email: 'autre@ecole.fr' })).status === 200);
+const mailCode = dernierMail('autre@ecole.fr');
+const code = /Code de confirmation : (\d{6})/.exec(mailCode?.text || '')?.[1];
+t('le code est dans l’e-mail', !!code, mailCode);
+t('mauvais code : refusé', (await jean('/api/apps/relier', { app: 'textetrous', email: 'autre@ecole.fr', code: code === '111111' ? '222222' : '111111' })).status === 403);
+t('bon code : relié avec l’autre adresse', (await jean('/api/apps/relier', { app: 'textetrous', email: 'autre@ecole.fr', code })).status === 200 && (await jean('/api/moi')).data.apps.textetrous.email === 'autre@ecole.fr');
+t('code déjà utilisé : refusé', (await jean('/api/apps/relier', { app: 'textetrous', email: 'autre@ecole.fr', code })).status === 403);
+await jean('/api/apps/relier', { app: 'textetrous' });
 const marie = appel(await compte('marie@ecole.fr'));
 await marie('/api/choix', { applications: ['memoriser'] });
 t('adresse inconnue dans l’application : refus clair', (await marie('/api/apps/relier', { app: 'memoriser' })).status === 404);
@@ -142,6 +156,37 @@ t('dates de trimestre enregistrées', (await admin('/api/admin/trimestres', { T1
 bu = (await jean('/api/bulletin?trimestre=T1&classe=5B')).data;
 t('nouvelles dates (fin le 2 oct.) : Alice n’a plus que son 1er essai de Texte à trous, 40 % = 8 / 20', ligne('5b_durand_alice').calculee === 8, ligne('5b_durand_alice'));
 await db.doc('reglages/trimestres').delete();
+
+console.log('Parents');
+await admin('/api/admin/eleves', { texte: 'Classe;Nom;Prénom;Parent 1;Parent 2\n5B;DURAND;Alice;parent.alice@mail.fr\n5B;LEROY;Bob;papa.bob@mail.fr;maman.bob@mail.fr\n5B;PETIT;Chloé\n' });
+t('enseignant non prof principal : refusé', (await jean('/api/parents?classe=5B')).status === 403);
+let par = (await marie('/api/parents?classe=5B')).data;
+t('prof principal : adresses des parents, rien d’envoyé', par.eleves?.find(e => e.id === '5b_leroy_bob')?.parents.map(p => p.email).join() === 'papa.bob@mail.fr,maman.bob@mail.fr' && par.eleves.every(e => e.parents.every(p => !p.envoyeLe)), par);
+t('élève sans adresse : refus clair', (await marie('/api/parents/envoyer', { classe: '5B', refIds: ['5b_petit_chloe'] })).status === 400);
+const env = await marie('/api/parents/envoyer', { classe: '5B', refIds: ['5b_leroy_bob'] });
+t('2 e-mails envoyés, applications à jour', env.data.envoyes === 2 && env.data.erreurs?.length === 0, env.data);
+const mp1 = motDePasseDe(dernierMail('papa.bob@mail.fr')), mp2 = motDePasseDe(dernierMail('maman.bob@mail.fr'));
+t('chaque parent a son mot de passe', !!mp1 && !!mp2 && mp1 !== mp2, [mp1, mp2]);
+t('l’e-mail nomme les applications', /Il sert dans : Mémoriser c'est facile, Texte à trous/.test(dernierMail('papa.bob@mail.fr')?.text || ''), dernierMail('papa.bob@mail.fr')?.text);
+t('Mémoriser : parent 1 entre avec son mot de passe', (await loginParent(mp1, '10.9.0.1')) === 200);
+t('Mémoriser : parent 2 aussi', (await loginParent(mp2, '10.9.0.2')) === 200);
+t('Mémoriser : l’ancien mot de passe de l’enfant ne sert plus', (await loginParent('1234', '10.9.0.3')) === 403);
+const tat = await parentsTat();
+t('Texte à trous : les deux empreintes reçues pour Bob', /^scrypt:/.test(tat.s2_1 || '') && /^scrypt:/.test(tat.s2_2 || '') && !tat.s1_1, tat);
+const docP = (await db.doc('parents/5b_leroy_bob__1').get()).data();
+t('Suivi ne garde pas le mot de passe en clair', !!docP && !JSON.stringify(docP).includes(mp1));
+par = (await marie('/api/parents?classe=5B')).data;
+t('date d’envoi affichée', par.eleves.find(e => e.id === '5b_leroy_bob').parents.every(p => !!p.envoyeLe));
+const nb = mails().length;
+t('mot de passe perdu, adresse inconnue : même réponse, aucun e-mail', (await appel(null)('/api/parents/oubli', { email: 'inconnu@mail.fr' })).status === 200 && mails().length === nb);
+t('mot de passe perdu : nouveau mot de passe pour ce parent seulement', (await appel(null)('/api/parents/oubli', { email: 'PAPA.bob@mail.fr' })).status === 200 && mails().length === nb + 1);
+const mp1b = motDePasseDe(dernierMail('papa.bob@mail.fr'));
+t('nouveau mot de passe différent', !!mp1b && mp1b !== mp1);
+t('l’ancien ne marche plus, le nouveau oui', (await loginParent(mp1, '10.9.0.4')) === 403 && (await loginParent(mp1b, '10.9.0.5')) === 200);
+t('le parent 2 garde le sien', (await loginParent(mp2, '10.9.0.6')) === 200);
+await appel(null)('/api/parents/oubli', { email: 'papa.bob@mail.fr' });
+await appel(null)('/api/parents/oubli', { email: 'papa.bob@mail.fr' });
+t('trop de demandes : bloqué', (await appel(null)('/api/parents/oubli', { email: 'papa.bob@mail.fr' })).status === 429);
 
 console.log('Délier');
 await jean('/api/apps/retirer', { app: 'textetrous' });

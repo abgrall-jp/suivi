@@ -4,6 +4,7 @@
 // Une correspondance sûre est faite seule ; un doute est montré à l'enseignant, qui choisit une fois pour toutes.
 
 export type EleveRef = { id: string; classe: string; nom: string; prenom: string };
+export type EleveImporte = EleveRef & { email1: string; email2: string };
 export type Niveau = "sur" | "probable";
 export type Decision =
   | { statut: "auto"; refId: string }
@@ -65,18 +66,24 @@ export function decider(nomApp: string, classeApp: string, refs: EleveRef[]): De
 export const idEleve = (classe: string, nom: string, prenom: string) =>
   `${cleClasse(classe)}_${normaliser(nom).replace(/ /g, "-")}_${normaliser(prenom).replace(/ /g, "-")}`.slice(0, 150);
 
-/** Liste d'élèves collée depuis un tableur ou un fichier CSV : Classe ; Nom ; Prénom (séparateur ; , ou tabulation). */
-export function lireListe(texte: string): { eleves: EleveRef[]; erreurs: string[] } {
-  const eleves = new Map<string, EleveRef>();
+/**
+ * Liste d'élèves collée depuis un tableur ou un fichier CSV : Classe ; Nom ; Prénom ; e-mail parent 1 ; e-mail parent 2
+ * (séparateur ; , ou tabulation ; les e-mails sont facultatifs).
+ */
+export function lireListe(texte: string): { eleves: EleveImporte[]; erreurs: string[] } {
+  const eleves = new Map<string, EleveImporte>();
   const erreurs: string[] = [];
   const lignes = String(texte || "").replace(/^﻿/, "").split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   lignes.forEach((ligne, i) => {
     const cols = ligne.split(/[;\t,]/).map(c => c.trim().replace(/^"|"$/g, ""));
     if (i === 0 && /classe/i.test(cols[0] || "") && /nom/i.test(cols[1] || "")) return;
     const [classe, nom, prenom] = cols;
+    const [email1, email2] = [cols[3], cols[4]].map(e => (e || "").toLowerCase());
     if (!classe || !nom || !prenom) { erreurs.push(`Ligne ${i + 1} : il faut la classe, le nom et le prénom.`); return; }
+    const mauvais = [email1, email2].find(e => e && !/^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,}$/i.test(e));
+    if (mauvais) { erreurs.push(`Ligne ${i + 1} : adresse e-mail incorrecte (${mauvais.slice(0, 80)}).`); return; }
     const id = idEleve(classe, nom, prenom);
-    eleves.set(id, { id, classe: classe.slice(0, 40), nom: nom.slice(0, 80), prenom: prenom.slice(0, 80) });
+    eleves.set(id, { id, classe: classe.slice(0, 40), nom: nom.slice(0, 80), prenom: prenom.slice(0, 80), email1, email2 });
   });
   return { eleves: Array.from(eleves.values()), erreurs };
 }

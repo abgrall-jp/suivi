@@ -1,0 +1,27 @@
+// Captures : page publique « mot de passe perdu » et onglet Parents (après api.mjs).
+import { createRequire } from 'module';
+const require = createRequire('/home/user/suivi/package.json');
+const { chromium } = require('playwright');
+const OUT = process.argv[2];
+const b = await chromium.launch();
+const p = await b.newPage({ viewport: { width: 1280, height: 720 } });
+const erreurs = [];
+p.on('pageerror', e => erreurs.push(e.message));
+await p.goto('http://127.0.0.1:3300/parents');
+await p.fill('input[type=email]', 'maman.bob@mail.fr');
+await p.click('button[type=submit]');
+await p.waitForSelector('text=Si cette adresse est connue');
+await p.screenshot({ path: `${OUT}/11-parents-oubli.png` });
+await p.goto('http://127.0.0.1:3300/');
+await p.fill('input[type=email]', 'admin@ecole.fr');
+await p.fill('input[type=password]', 'secret12');
+await p.click('button[type=submit]');
+await p.waitForSelector('text=Bienvenue dans Suivi');
+await p.click('label:has-text("Mémoriser")');
+await p.click('button:has-text("Continuer")');
+await p.click('nav button:has-text("Parents")');
+await p.selectOption('select', { index: 1 });
+await p.waitForSelector('text=papa.bob@mail.fr');
+await p.screenshot({ path: `${OUT}/12-parents.png` });
+console.log('erreurs :', erreurs.length ? erreurs : 'aucune');
+await b.close();

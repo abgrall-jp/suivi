@@ -8,6 +8,7 @@ import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { cleClasse, decider, lireListe, normaliser, type EleveRef } from "./lib/correspondance.ts";
 import { APPLICATIONS, type Application } from "./lib/applications.ts";
+import { empreinte, genererMotDePasse } from "./lib/parents.ts";
 import { dateValide, estTrimestre, lireNote, moyenne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
 
 // ---------------------------------------------------------------------------
@@ -21,7 +22,8 @@ import { dateValide, estTrimestre, lireNote, moyenne, noteSur20, periodesParDefa
 //   SUIVI_CLE_<APPLI>         clé de liaison d'une application, la même que SUIVI_CLE dans cette application
 //                             (SUIVI_CLE_TEXTETROUS, SUIVI_CLE_MEMORISER…) ; sans clé, l'application est « bientôt »
 //   SUIVI_URL_<APPLI>         adresse d'une application, si elle diffère de l'adresse prévue
-//   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_FROM  envoi des e-mails (codes de confirmation)
+//   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_FROM  envoi des e-mails (codes de confirmation, mots de passe des parents)
+//   ADRESSE_PUBLIQUE          adresse de Suivi dans les e-mails (sinon https://suivi.jepeuxapprendre.fr)
 // ---------------------------------------------------------------------------
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -137,7 +139,10 @@ async function fiche(e: Enseignant): Promise<any> {
 }
 
 // --- Envoi des e-mails ---------------------------------------------------------------------
-const mailer = process.env.SMTP_HOST
+// MAIL_FICHIER (essais seulement) : les e-mails sont écrits dans ce fichier au lieu d'être envoyés.
+const mailer = process.env.MAIL_FICHIER
+  ? nodemailer.createTransport({ jsonTransport: true })
+  : process.env.SMTP_HOST
   ? nodemailer.createTransport({
     host: process.env.SMTP_HOST, port: Number(process.env.SMTP_PORT) || 465, secure: (Number(process.env.SMTP_PORT) || 465) === 465,
     auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined,
@@ -146,7 +151,8 @@ const mailer = process.env.SMTP_HOST
 
 async function envoyerMail(a: string, sujet: string, texte: string) {
   if (!mailer) throw httpError(503, "L'envoi d'e-mails n'est pas encore réglé sur le serveur.");
-  await mailer.sendMail({ from: process.env.MAIL_FROM || process.env.SMTP_USER, to: a, subject: sujet, text: texte });
+  const info: any = await mailer.sendMail({ from: process.env.MAIL_FROM || process.env.SMTP_USER || "suivi@jepeuxapprendre.fr", to: a, subject: sujet, text: texte });
+  if (process.env.MAIL_FICHIER) fs.appendFileSync(process.env.MAIL_FICHIER, String(info.message) + "\n");
 }
 
 // --- Données lues dans les applications (gardées 20 secondes) ------------------------------
@@ -295,6 +301,12 @@ app.post("/api/apps/relier", exigerEnseignant(), route(async (req, res) => {
     apps: { [a.id]: { email, nomDansAppli: String(r.teacher.name || ""), relieeLe: new Date().toISOString() } },
     choisies: FieldValue.arrayUnion(a.id),
   }, { merge: true });
+  // Les parents qui ont déjà un mot de passe le gardent dans cette application aussi.
+  db.collection("parents").get().then(snap => {
+    const cibles = new Map<string, Record<number, string | null>>();
+    for (const d of snap.docs) cibles.set(String(d.get("refId")), { ...(cibles.get(String(d.get("refId"))) || {}), [Number(d.get("n"))]: String(d.get("empreinte")) });
+    return pousserEmpreintes(cibles, { uid: e.uid, app: a.id });
+  }).then(r => { if (r.erreurs.length) console.error("Mots de passe des parents :", r.erreurs); }).catch(err => console.error("Mots de passe des parents :", err));
   res.json({ ok: true, nom: String(r.teacher.name || "") });
 }));
 
@@ -496,7 +508,12 @@ app.post("/api/bulletin/figer", exigerEnseignant(), route(async (req, res) => {
 app.get("/api/pp", exigerEnseignant(), route(async (req, res) => {
   const e = ensDe(req);
   const snap = await db.collection("classes").where("pp", "array-contains", e.email).get();
-  res.json({ classes: snap.docs.map(d => ({ cle: d.id, nom: String(d.get("nom") || d.id) })).sort((a, b) => a.nom.localeCompare(b.nom, "fr")), periodes: await periodes() });
+  const classes = snap.docs.map(d => ({ cle: d.id, nom: String(d.get("nom") || d.id) })).sort((a, b) => a.nom.localeCompare(b.nom, "fr"));
+  // Classes dont il envoie les mots de passe des parents : les siennes, ou toutes pour l'administrateur.
+  const gerees = e.isAdmin
+    ? Array.from(new Map((await elevesReference()).map(r => [cleClasse(r.classe), r.classe])).entries()).map(([cle, nom]) => ({ cle, nom })).sort((a, b) => a.nom.localeCompare(b.nom, "fr"))
+    : classes;
+  res.json({ classes, gerees, periodes: await periodes() });
 }));
 
 app.get("/api/pp/bulletin", exigerEnseignant(), route(async (req, res) => {
@@ -570,10 +587,135 @@ app.post("/api/admin/eleves", exigerEnseignant(), route(async (req, res) => {
   const garder = new Set(eleves.map(x => x.id));
   const w = db.bulkWriter();
   for (const d of avant.docs) if (!garder.has(d.id)) w.delete(d.ref);
-  for (const x of eleves) w.set(db.doc(`eleves/${x.id}`), { classe: x.classe, nom: x.nom, prenom: x.prenom });
+  for (const x of eleves) w.set(db.doc(`eleves/${x.id}`), { classe: x.classe, nom: x.nom, prenom: x.prenom, email1: x.email1, email2: x.email2 });
   await w.close();
   cacheRefs = null;
   res.json({ ok: true, nombre: eleves.length, retires: avant.docs.filter(d => !garder.has(d.id)).length });
+}));
+
+// --- Parents : un mot de passe par parent, le même dans toutes les applications ---------------
+// parents/{élève}__{1|2} : adresse, empreinte (jamais le mot de passe), date d'envoi.
+// Les adresses viennent de la liste de l'établissement (4e et 5e colonnes).
+const ADRESSE = (process.env.ADRESSE_PUBLIQUE || "https://suivi.jepeuxapprendre.fr").replace(/\/+$/, "");
+const limiteOubliIp = makeLimiter(10, 60 * 60 * 1000);
+const limiteOubliEmail = makeLimiter(3, 60 * 60 * 1000);
+
+/**
+ * Envoie les empreintes aux applications de tous les enseignants qui ont ces élèves.
+ * cibles : élève de référence → { 1: empreinte, 2: empreinte } (null efface). seulement : une seule application d'un enseignant.
+ */
+async function pousserEmpreintes(cibles: Map<string, Record<number, string | null>>, seulement?: { uid: string; app: string }) {
+  const parEleve = new Map<string, Set<string>>();
+  const erreurs: string[] = [];
+  if (!cibles.size) return { parEleve, erreurs };
+  const ens = seulement ? [await db.doc(`enseignants/${seulement.uid}`).get()] : (await db.collection("enseignants").get()).docs;
+  for (const doc of ens) {
+    const f = doc.data() || {};
+    for (const a of APPLICATIONS) {
+      const email = f.apps?.[a.id]?.email;
+      if (!a.eleves || !email || !cleDe(a) || (seulement && seulement.app !== a.id)) continue;
+      try {
+        const d = await donnees(a, email);
+        const { provisoire, resultat } = await rapprocher([{ app: a, d }]);
+        if (provisoire) continue;
+        for (const r of resultat) {
+          const voulu = r.refId ? cibles.get(r.refId) : undefined;
+          if (!voulu) continue;
+          for (const [n, emp] of Object.entries(voulu)) await porte(a, "/api/suivi/mot-de-passe-parent", { email, studentId: r.studentId, parent: Number(n), empreinte: emp });
+          (parEleve.get(r.refId!) || parEleve.set(r.refId!, new Set()).get(r.refId!))!.add(a.nom);
+        }
+      } catch (err: any) {
+        erreurs.push(`${a.nom} (${email}) : ${String(err?.message || err)}`);
+      }
+    }
+  }
+  return { parEleve, erreurs };
+}
+
+const texteMail = (prenomEnfant: string, nomEnfant: string, mdp: string, apps: string[]) =>
+  `Bonjour,\n\nVoici votre mot de passe de parent pour suivre ${prenomEnfant} ${nomEnfant} dans les applications Je peux apprendre :\n\n    ${mdp}\n\n` +
+  `Il est personnel : l'autre parent reçoit le sien.\n` +
+  (apps.length ? `Il sert dans : ${apps.join(", ")}.\n` : "") +
+  `Dans chaque application, choisissez « Parent », puis votre enfant, et écrivez ce mot de passe.\n\n` +
+  `Mot de passe perdu ? Demandez-en un nouveau ici : ${ADRESSE}/parents\n\nBonne journée.`;
+
+/** Nouveau mot de passe pour ces parents : empreinte envoyée aux applications, puis e-mail. */
+async function nouveauxMotsDePasse(liste: { ref: EleveRef; n: 1 | 2; email: string }[]) {
+  const mdp = new Map<string, string>();
+  const cibles = new Map<string, Record<number, string | null>>();
+  for (const x of liste) {
+    const m = genererMotDePasse();
+    const emp = empreinte(m);
+    mdp.set(`${x.ref.id}__${x.n}`, m);
+    cibles.set(x.ref.id, { ...(cibles.get(x.ref.id) || {}), [x.n]: emp });
+  }
+  const { parEleve, erreurs } = await pousserEmpreintes(cibles);
+  let envoyes = 0;
+  for (const x of liste) {
+    const cle = `${x.ref.id}__${x.n}`;
+    await envoyerMail(x.email, `Mot de passe parent : ${x.ref.prenom} ${x.ref.nom}`, texteMail(x.ref.prenom, x.ref.nom, mdp.get(cle)!, Array.from(parEleve.get(x.ref.id) || [])));
+    await db.doc(`parents/${cle}`).set({ refId: x.ref.id, n: x.n, email: x.email, empreinte: cibles.get(x.ref.id)![x.n], envoyeLe: new Date().toISOString() });
+    envoyes++;
+  }
+  return { envoyes, erreurs };
+}
+
+async function peutGererClasse(e: Enseignant, classe: string) {
+  if (e.isAdmin) return true;
+  const c = (await db.doc(`classes/${classe}`).get()).data();
+  return !!c && Array.isArray(c.pp) && c.pp.includes(e.email);
+}
+
+async function elevesAvecParents(classe: string) {
+  const snap = await db.collection("eleves").get();
+  return snap.docs.filter(d => cleClasse(String(d.get("classe") || "")) === classe).map(d => ({
+    id: d.id, classe: String(d.get("classe") || ""), nom: String(d.get("nom") || ""), prenom: String(d.get("prenom") || ""),
+    email1: String(d.get("email1") || ""), email2: String(d.get("email2") || ""),
+  })).sort(parNom);
+}
+
+app.get("/api/parents", exigerEnseignant(), route(async (req, res) => {
+  const classe = cleClasse(String(req.query.classe || ""));
+  if (!classe || !(await peutGererClasse(ensDe(req), classe))) throw httpError(403, "Réservé au professeur principal de la classe et à l'administrateur.");
+  const eleves = await elevesAvecParents(classe);
+  const envois = eleves.length ? await db.getAll(...eleves.flatMap(x => [1, 2].map(n => db.doc(`parents/${x.id}__${n}`)))) : [];
+  const envoi = new Map(envois.filter(d => d.exists).map(d => [d.id, d.data()!]));
+  res.json({
+    eleves: eleves.map(x => ({
+      id: x.id, nom: x.nom, prenom: x.prenom,
+      parents: ([1, 2] as const).map(n => {
+        const p = envoi.get(`${x.id}__${n}`);
+        const email = n === 1 ? x.email1 : x.email2;
+        return { n, email, envoyeLe: p && p.email === email ? p.envoyeLe : null };
+      }),
+    })),
+  });
+}));
+
+app.post("/api/parents/envoyer", exigerEnseignant(), route(async (req, res) => {
+  const classe = cleClasse(String(req.body?.classe || ""));
+  if (!classe || !(await peutGererClasse(ensDe(req), classe))) throw httpError(403, "Réservé au professeur principal de la classe et à l'administrateur.");
+  if (!mailer) throw httpError(503, "L'envoi d'e-mails n'est pas encore réglé sur le serveur.");
+  const voulus = new Set(Array.isArray(req.body?.refIds) ? req.body.refIds.map(String) : []);
+  const liste = (await elevesAvecParents(classe)).filter(x => voulus.has(x.id))
+    .flatMap(x => ([1, 2] as const).map(n => ({ ref: x, n, email: n === 1 ? x.email1 : x.email2 }))).filter(x => x.email);
+  if (!liste.length) throw httpError(400, "Aucune adresse de parent pour ces élèves.");
+  res.json(await nouveauxMotsDePasse(liste));
+}));
+
+// Mot de passe perdu (page publique /parents) : un nouveau mot de passe est envoyé à l'adresse connue, et seulement à elle.
+app.post("/api/parents/oubli", route(async (req, res) => {
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  if (!emailValide(email)) throw httpError(400, "Adresse e-mail incorrecte.");
+  if (!limiteOubliIp(String(req.ip)) || !limiteOubliEmail(email)) throw httpError(429, "Trop de demandes. Réessayez dans une heure.");
+  const [s1, s2] = await Promise.all([db.collection("eleves").where("email1", "==", email).get(), db.collection("eleves").where("email2", "==", email).get()]);
+  const liste = [...s1.docs.map(d => ({ d, n: 1 as const })), ...s2.docs.map(d => ({ d, n: 2 as const }))]
+    .map(({ d, n }) => ({ ref: { id: d.id, classe: String(d.get("classe")), nom: String(d.get("nom")), prenom: String(d.get("prenom")) }, n, email }));
+  if (liste.length) {
+    try { await nouveauxMotsDePasse(liste); } catch (e) { console.error("Mot de passe parent perdu :", e); }
+  }
+  // Même réponse que l'adresse soit connue ou non.
+  res.json({ ok: true });
 }));
 
 // Professeurs principaux et dates des trimestres (administrateur).

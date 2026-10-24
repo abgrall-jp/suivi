@@ -45,3 +45,11 @@ test("liste collée depuis un tableur", () => {
   assert.equal(eleves[0].id, "5a_martin_lea");
   assert.deepEqual(erreurs, ["Ligne 4 : il faut la classe, le nom et le prénom."]);
 });
+
+test("e-mails des parents, facultatifs", () => {
+  const { eleves, erreurs } = lireListe("5A;MARTIN;Léa;Papa@mail.fr;maman@mail.fr\n5A;DUBOIS;Hugo;;\n5A;PETIT;Zoé;pas-un-mail\n");
+  assert.equal(eleves[0].email1, "papa@mail.fr");
+  assert.equal(eleves[0].email2, "maman@mail.fr");
+  assert.equal(eleves[1].email1, "");
+  assert.deepEqual(erreurs, ["Ligne 3 : adresse e-mail incorrecte (pas-un-mail)."]);
+});
