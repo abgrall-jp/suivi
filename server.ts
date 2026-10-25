@@ -27,6 +27,7 @@ import { dateValide, estTrimestre, lireNote, moyenne, noteSur20, periodesParDefa
 //   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_FROM  envoi des e-mails (codes de confirmation, mots de passe des parents)
 //   STUDIO_FIRESTORE_DATABASE_ID  base du Studio d'Appréciations (même projet Google que Suivi)
 //   FIREBASE_SERVICE_ACCOUNT_PLANCLASSE  clé JSON d'un compte de service du projet du Plan de classe IA (gen-lang-client-0301284188)
+//                             (sinon fichier service-account-planclasse.json)
 //   PLANCLASSE_DATABASE_ID    base du Plan de classe IA (sinon plan-classe-eu, celle de la version o2switch)
 //   ADRESSE_PUBLIQUE          adresse de Suivi dans les e-mails (sinon https://suivi.jepeuxapprendre.fr)
 // ---------------------------------------------------------------------------
@@ -61,7 +62,7 @@ const studioDb = getFirestore(adminApp, process.env.STUDIO_FIRESTORE_DATABASE_ID
 // Le Plan de classe IA est dans un autre projet Google : un compte de service à part, en lecture seulement.
 const comptePdc = process.env.FIREBASE_SERVICE_ACCOUNT_PLANCLASSE
   ? (() => { try { return JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_PLANCLASSE!); } catch { console.error("FIREBASE_SERVICE_ACCOUNT_PLANCLASSE n'est pas un JSON valide"); return null; } })()
-  : null;
+  : readJsonFile("service-account-planclasse.json");
 const projetPdc = comptePdc?.project_id || process.env.PLANCLASSE_PROJECT_ID; // PLANCLASSE_PROJECT_ID : essais avec les émulateurs
 const pdcDb = projetPdc
   ? getFirestore(initializeApp({ projectId: projetPdc, ...(comptePdc ? { credential: cert(comptePdc) } : {}) }, "planclasse"),
