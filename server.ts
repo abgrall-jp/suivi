@@ -27,7 +27,7 @@ import { dateValide, estTrimestre, lireNote, moyenne, noteSur20, periodesParDefa
 //   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_FROM  envoi des e-mails (codes de confirmation, mots de passe des parents)
 //   STUDIO_FIRESTORE_DATABASE_ID  base du Studio d'Appréciations (même projet Google que Suivi)
 //   FIREBASE_SERVICE_ACCOUNT_PLANCLASSE  clé JSON d'un compte de service du projet du Plan de classe IA (gen-lang-client-0301284188)
-//   PLANCLASSE_DATABASE_ID    base du Plan de classe IA (sinon ai-studio-plandeclasseia-…)
+//   PLANCLASSE_DATABASE_ID    base du Plan de classe IA (sinon plan-classe-eu, celle de la version o2switch)
 //   ADRESSE_PUBLIQUE          adresse de Suivi dans les e-mails (sinon https://suivi.jepeuxapprendre.fr)
 // ---------------------------------------------------------------------------
 
@@ -65,15 +65,32 @@ const comptePdc = process.env.FIREBASE_SERVICE_ACCOUNT_PLANCLASSE
 const projetPdc = comptePdc?.project_id || process.env.PLANCLASSE_PROJECT_ID; // PLANCLASSE_PROJECT_ID : essais avec les émulateurs
 const pdcDb = projetPdc
   ? getFirestore(initializeApp({ projectId: projetPdc, ...(comptePdc ? { credential: cert(comptePdc) } : {}) }, "planclasse"),
-    process.env.PLANCLASSE_DATABASE_ID || "ai-studio-plandeclasseia-81a53100-2107-4731-87b5-73225b704ef0")
+    process.env.PLANCLASSE_DATABASE_ID || "plan-classe-eu")
   : null;
 let cachePlans: { at: number; plans: PlanPublie[] } | null = null;
 async function plansPublies(): Promise<PlanPublie[]> {
   if (!pdcDb) return [];
   if (cachePlans && Date.now() - cachePlans.at < 20000) return cachePlans.plans;
-  // Sans les placements ni les photos, qui peuvent être lourds.
-  const snap = await pdcDb.collection("publishedPlans").select("teacherEmail", "teacherName", "className", "studentRemarks").get();
-  cachePlans = { at: Date.now(), plans: snap.docs.map(d => d.data() as PlanPublie) };
+  // Sans les placements ni les photos, qui peuvent être lourds. Dans la version o2switch du Plan de classe,
+  // les remarques sont rangées à part (planSecrets) et le plan ne garde parfois que le compte de l'enseignant (teacherId).
+  const [plans, secrets, profs] = await Promise.all([
+    pdcDb.collection("publishedPlans").select("teacherEmail", "teacherId", "teacherName", "className", "studentRemarks").get(),
+    pdcDb.collection("planSecrets").select("studentRemarks").get(),
+    pdcDb.collection("teachers").select("email").get(),
+  ]);
+  const remarques = new Map(secrets.docs.map(d => [d.id, d.get("studentRemarks")]));
+  const emails = new Map(profs.docs.map(d => [d.id, String(d.get("email") || "")]));
+  cachePlans = {
+    at: Date.now(),
+    plans: plans.docs.map(d => {
+      const p = d.data();
+      return {
+        teacherEmail: p.teacherEmail || emails.get(String(p.teacherId || "")) || "",
+        teacherName: p.teacherName, className: p.className,
+        studentRemarks: remarques.get(d.id) || p.studentRemarks,
+      } as PlanPublie;
+    }),
+  };
   return cachePlans.plans;
 }
 
