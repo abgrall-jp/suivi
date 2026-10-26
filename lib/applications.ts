@@ -4,13 +4,14 @@
 // « lecture » : par la porte de liaison de l'application (par défaut), ou directement dans la base du Studio d'Appréciations,
 // qui partage le projet Google de Suivi (mêmes comptes enseignants, aucune clé à régler), ou dans la base du Plan de classe IA
 // (autre projet Google : compte de service à part, enseignant reconnu par son adresse e-mail).
-export type Application = { id: string; code: string; nom: string; url: string; eleves: boolean; lecture?: "porte" | "studio" | "planclasse" };
+// « parents: false » : l'application n'a pas d'espace parents (pas de mot de passe parent à lui envoyer).
+export type Application = { id: string; code: string; nom: string; url: string; eleves: boolean; lecture?: "porte" | "studio" | "planclasse"; parents?: false };
 
 export const APPLICATIONS: Application[] = [
   { id: "sequenceur", code: "SEQ", nom: "Séquenceur", url: "https://sequenceur.jepeuxapprendre.fr", eleves: true },
   { id: "evalia", code: "EVA", nom: "Eval IA", url: "https://evalia.jepeuxapprendre.fr", eleves: true },
   { id: "edubot", code: "EDU", nom: "Edubot", url: "https://edubot.jepeuxapprendre.fr", eleves: true },
-  { id: "cps", code: "CPS", nom: "AI CPS", url: "https://cps.jepeuxapprendre.fr", eleves: true },
+  { id: "cps", code: "CPS", nom: "AI CPS", url: "https://cps.jepeuxapprendre.fr", eleves: true, parents: false },
   { id: "concentre", code: "CON", nom: "Concentré et Attentif", url: "https://concentre.jepeuxapprendre.fr", eleves: true },
   { id: "memoriser", code: "MEM", nom: "Mémoriser c'est facile", url: "https://memoriser.jepeuxapprendre.fr", eleves: true },
   { id: "motscroises", code: "MCR", nom: "Mots croisés", url: "https://motscroises.jepeuxapprendre.fr", eleves: true },

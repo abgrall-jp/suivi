@@ -688,7 +688,7 @@ async function pousserEmpreintes(cibles: Map<string, Record<number, string | nul
     const f = doc.data() || {};
     for (const a of APPLICATIONS) {
       const email = f.apps?.[a.id]?.email;
-      if (!a.eleves || !parPorte(a) || !email || !cleDe(a) || (seulement && seulement.app !== a.id)) continue;
+      if (!a.eleves || a.parents === false || !parPorte(a) || !email || !cleDe(a) || (seulement && seulement.app !== a.id)) continue;
       try {
         const d = await donnees(a, email);
         const { provisoire, resultat } = await rapprocher([{ app: a, d }]);
