@@ -108,7 +108,11 @@ export function VueBulletin() {
             <table className="tableau bulletin">
               <thead><tr>
                 <th className="fixe">Élève</th>
-                {colonnes.map(c => <th key={c.cle} className="exo" title={`${c.app} : ${c.titre}`}><EnteteColonne titre={c.titre} /><span className="coef">coef. {note(c.coef ?? 1)}</span></th>)}
+                {colonnes.map(c => <th key={c.cle} className="exo" title={`${c.app} : ${c.titre}`}><EnteteColonne titre={c.titre} />
+                  <span className="coef">coef. <ChampCoef valeur={c.coef ?? 1} onValider={async v => {
+                    setMsg("");
+                    try { await api("/api/bulletin/colonnes", { trimestre, classe, colonnes: colonnes.map(x => (x.cle === c.cle ? { ...x, coef: v } : x)), externes }); await charger(); } catch (e: any) { setMsg(e.message); }
+                  }} /></span></th>)}
                 <th>Moyenne calculée</th><th>Définitive</th>
                 {externes.map(x => <th key={x.id}>{x.titre}</th>)}
                 <th>Appréciation</th>
@@ -157,6 +161,17 @@ function ChampNote({ valeur, indication, onValider }: { valeur: number | null; i
     <input className="note" inputMode="decimal" value={v} placeholder={indication || ""} onChange={e => setV(e.target.value)}
       onBlur={() => { if (v !== note(valeur)) onValider(v); }} onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
   );
+}
+
+function ChampCoef({ valeur, onValider }: { valeur: number; onValider: (v: number) => void }) {
+  const [v, setV] = useState(note(valeur));
+  useEffect(() => setV(note(valeur)), [valeur]);
+  const valider = () => {
+    const n = Number(v.replace(",", "."));
+    if (!Number.isFinite(n) || n <= 0) { setV(note(valeur)); return; }
+    if (n !== valeur) onValider(n);
+  };
+  return <input className="coef" inputMode="decimal" title="Coefficient : de 0,5 à 10" value={v} onChange={e => setV(e.target.value)} onBlur={valider} onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />;
 }
 
 function ChampTexte({ valeur, onValider }: { valeur: string; onValider: (v: string) => void }) {

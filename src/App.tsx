@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, connexionEmail, connexionGoogle, deconnexion, inscriptionEmail, motDePasseOublie } from "./firebase.ts";
 import { api, type Correspondances, type Moi, type Tableau } from "./api.ts";
@@ -258,9 +258,11 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
   const [classe, setClasse] = useState("");
   const [cherche, setCherche] = useState("");
   const [tri, setTri] = useState<Tri>(null);
+  const [voirMasquees, setVoirMasquees] = useState(false);
+  const defile = useRef<HTMLDivElement>(null);
 
-  const charger = useCallback(async () => {
-    try { const d = await api<Tableau>("/api/tableau"); setT(d); onAVerifier(d.aVerifier); setMsg(""); } catch (e: any) { setMsg(e.message); }
+  const charger = useCallback(async (frais = false) => {
+    try { const d = await api<Tableau>(`/api/tableau${frais ? "?frais=1" : ""}`); setT(d); onAVerifier(d.aVerifier); setMsg(""); } catch (e: any) { setMsg(e.message); }
   }, [onAVerifier]);
 
   // Mise à jour toutes les 30 secondes, tant que la page est visible.
@@ -275,9 +277,11 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
   // Colonnes : seulement celles où un élève affiché a un résultat (une classe de 4e ne voit pas les séquences de 2de),
   // et celles dont le titre contient le texte cherché.
   const mots = sansAccent(cherche).split(/\s+/).filter(Boolean);
+  const masquees = t?.masquees || [];
+  const titreDe = new Map((t?.applications || []).flatMap(a => a.exercices.map(x => [`${a.id}:${x.id}`, `${a.nom} · ${x.titre}`] as [string, string])));
   const apps = (t?.applications || []).map(a => ({
     ...a,
-    exercices: a.exercices.filter(x => filtres.some(e => e.resultats[`${a.id}:${x.id}`])
+    exercices: a.exercices.filter(x => !masquees.includes(`${a.id}:${x.id}`) && filtres.some(e => e.resultats[`${a.id}:${x.id}`])
       && mots.every(m => sansAccent(`${a.nom} ${x.titre}`).includes(m))),
   })).filter(a => a.exercices.length);
   const reliees = Object.keys(moi.apps).length;
@@ -291,6 +295,12 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
   // 1er clic : meilleurs en haut ; 2e : plus faibles en haut ; 3e : ordre de la classe.
   const trier = (cle: string) => setTri(p => (p?.cle !== cle ? { cle, sens: cle === "__nom" ? 1 : -1 } : p.sens === (cle === "__nom" ? 1 : -1) ? { cle, sens: (-p.sens) as 1 | -1 } : null));
   const fleche = (cle: string) => (tri?.cle === cle ? (tri.sens === -1 ? " ▼" : " ▲") : "");
+  const masquer = async (liste: string[]) => {
+    if (!t) return;
+    setT({ ...t, masquees: liste });
+    try { await api("/api/colonnes-masquees", { masquees: liste }); } catch (e: any) { setMsg(e.message); }
+  };
+  const decaler = (sens: number) => defile.current?.scrollBy({ left: sens * Math.max(300, defile.current.clientWidth * 0.7), behavior: "smooth" });
   const retirer = async (id: string, nom: string) => {
     if (!confirm(`Ne plus suivre ${nom} ? Il disparaît du tableau et du bulletin. Vous pourrez le remettre dans « Noms des élèves ».`)) return;
     try {
@@ -316,19 +326,28 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
           {classes.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
         <input type="search" placeholder="Chercher une colonne (ex. : 4e Séq. 2)" value={cherche} onChange={e => setCherche(e.target.value)} />
-        <button onClick={charger}>Actualiser</button>
+        <button onClick={() => charger(true)}>Actualiser</button>
+        {masquees.length > 0 && <button onClick={() => setVoirMasquees(!voirMasquees)}>Colonnes masquées ({masquees.length})</button>}
+        {!!apps.length && <span className="defilement"><button title="Voir les colonnes de gauche" onClick={() => decaler(-1)}>◀</button><button title="Voir les colonnes de droite" onClick={() => decaler(1)}>▶</button></span>}
         {t && <span className="petit">Mis à jour à {new Date(t.lu).toLocaleTimeString("fr-FR")}</span>}
       </div>
       {msg && <p className="erreur">{msg}</p>}
+      {voirMasquees && masquees.length > 0 && (
+        <div className="carte etiquettes">
+          <span className="petit">Colonnes masquées :</span>
+          {masquees.map(c => <span key={c} className="etiquette">{titreDe.get(c) || c} <button className="lien" onClick={() => masquer(masquees.filter(x => x !== c))}>afficher</button></span>)}
+          <button className="lien" onClick={() => { masquer([]); setVoirMasquees(false); }}>Tout afficher</button>
+        </div>
+      )}
       {t?.applications.filter(a => a.erreur).map(a => <p key={a.id} className="alerte">{a.nom} : {a.erreur}</p>)}
       {t && t.aVerifier > 0 && (
         <p className="alerte">{t.aVerifier} nom{t.aVerifier > 1 ? "s" : ""} d'élève à vérifier : leurs résultats n'apparaissent pas encore.{" "}
           <button className="lien" onClick={() => allerA("correspondances")}>Vérifier</button></p>
       )}
       {t?.provisoire && <p className="petit">La liste de l'établissement n'est pas encore importée : les élèves sont repris des applications.</p>}
-      {!!apps.length && <p className="petit">Cliquez sur le titre d'une colonne pour classer les élèves selon cette note (cliquez encore pour inverser).</p>}
+      {!!apps.length && <p className="petit">Cliquez sur le titre d'une colonne pour classer les élèves selon cette note (cliquez encore pour inverser). La croix ✕ masque une colonne inutile.</p>}
       {!apps.length ? <p>{cherche ? "Aucune colonne ne correspond à cette recherche." : "Pas encore de résultat dans les applications reliées."}</p> : (
-        <div className="defile">
+        <div className="defile" ref={defile}>
           <table className="tableau">
             <thead>
               <tr>
@@ -337,7 +356,9 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
               </tr>
               <tr>{apps.flatMap(a => a.exercices.map(x => {
                 const cle = `${a.id}:${x.id}`;
-                return <th key={cle} className={`exo triable ${tri?.cle === cle ? "trie" : ""}`} title={`${x.titre}\nCliquer pour classer`} onClick={() => trier(cle)}><EnteteColonne titre={x.titre} />{fleche(cle)}</th>;
+                return <th key={cle} className={`exo triable ${tri?.cle === cle ? "trie" : ""}`} title={`${x.titre}\nCliquer pour classer`} onClick={() => trier(cle)}>
+                  <button className="masquer" title="Masquer cette colonne" onClick={ev => { ev.stopPropagation(); masquer([...masquees, cle]); }}>✕</button>
+                  <EnteteColonne titre={x.titre} />{fleche(cle)}</th>;
               }))}</tr>
             </thead>
             <tbody>
@@ -418,7 +439,7 @@ function VueCorrespondances({ onChange }: { onChange: (n: number) => void }) {
   const ordre = ["a_verifier", "aucun", "ignore", "confirme", "auto"];
   const cleCl = (s: string) => sansAccent(s).replace(/[^a-z0-9]/g, "").replace(/^(\d+)(ieme|eme|em|e)?/, "$1");
   const classeExclue = (classe: string) => c.exclus.classes.includes(cleCl(classe));
-  const lignes = c.eleves.filter(e => (tous || e.statut === "a_verifier" || e.statut === "aucun") && !classeExclue(e.classe))
+  const lignes = c.eleves.filter(e => (tous || e.statut === "a_verifier" || e.statut === "aucun") && !classeExclue(e.classe) && (tous || !e.exclu))
     .sort((a, b) => ordre.indexOf(a.statut) - ordre.indexOf(b.statut) || a.classe.localeCompare(b.classe, "fr") || a.nom.localeCompare(b.nom, "fr"));
   const classes = Array.from(new Map(c.references.map(r => [cleCl(r.classe), r.classe])).entries()).sort((a, b) => a[1].localeCompare(b[1], "fr", { numeric: true }));
   const exclus = c.exclus.eleves.map(id => refDe.get(id) || { id, nom: id, prenom: "", classe: "" });
@@ -433,6 +454,11 @@ function VueCorrespondances({ onChange }: { onChange: (n: number) => void }) {
       <div className="carte">
         <h3>Élèves et classes suivis</h3>
         <p className="petit">Décochez une classe qui n'a pas besoin de suivi, ou retirez un élève (compte de test, élève parti). Ils disparaissent du tableau et du bulletin ; vous pouvez les remettre à tout moment.</p>
+        <div className="etiquettes">
+          <button className="lien" onClick={() => exclure({ ...c.exclus, classes: [] })}>Tout cocher</button>
+          <button className="lien" onClick={() => exclure({ ...c.exclus, classes: classes.map(([cle]) => cle) })}>Tout décocher</button>
+          <button className="lien" title="Les noms de professeurs ou de groupes de formation sont décochés" onClick={() => exclure({ ...c.exclus, classes: classes.filter(([, nom]) => !/^\s*\d/.test(nom)).map(([cle]) => cle) })}>Ne garder que les classes qui commencent par un chiffre</button>
+        </div>
         <div className="etiquettes">
           {classes.map(([cle, nom]) => (
             <label key={cle} className={`etiquette ${c.exclus.classes.includes(cle) ? "exclue" : ""}`}>

@@ -25,11 +25,12 @@ export type Tableau = {
   applications: { id: string; code: string; nom: string; erreur: string | null; exercices: { id: string; titre: string }[] }[];
   eleves: { id: string; classe: string; nom: string; prenom: string; resultats: Record<string, { percent: number; score: string; at: number | null }> }[];
   aVerifier: number;
+  masquees: string[];
   lu: number;
 };
 export type Correspondances = {
   provisoire: boolean;
   exclus: { eleves: string[]; classes: string[] };
   references: { id: string; classe: string; nom: string; prenom: string }[];
-  eleves: { app: string; appNom: string; studentId: string; nom: string; classe: string; statut: "confirme" | "auto" | "a_verifier" | "aucun" | "ignore"; refId: string | null; candidats: string[] }[];
+  eleves: { app: string; appNom: string; studentId: string; nom: string; classe: string; statut: "confirme" | "auto" | "a_verifier" | "aucun" | "ignore"; refId: string | null; candidats: string[]; exclu?: boolean }[];
 };

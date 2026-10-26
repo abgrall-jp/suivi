@@ -215,10 +215,11 @@ type Donnees = {
   results: { id: string; studentId: string; exerciseId: string; exerciseTitle: string; percent: number; score: string; completedAt: number | null }[];
 };
 const cacheDonnees = new Map<string, { at: number; data: Donnees }>();
-async function donnees(a: Application, email: string): Promise<Donnees> {
+async function donnees(a: Application, email: string, frais = false): Promise<Donnees> {
   const cle = `${a.id}:${email}`;
   const hit = cacheDonnees.get(cle);
-  if (hit && Date.now() - hit.at < 20000) return hit.data;
+  // Gardées 2 minutes (le bouton Actualiser relit tout de suite) : chaque page n'interroge plus toutes les applications.
+  if (hit && Date.now() - hit.at < (frais ? 5000 : 120000)) return hit.data;
   const d = await porte(a, `/api/suivi/donnees?email=${encodeURIComponent(email)}`);
   const data: Donnees = {
     classes: Array.isArray(d.classes) ? d.classes : [],
@@ -378,12 +379,12 @@ app.post("/api/apps/retirer", exigerEnseignant(), route(async (req, res) => {
 }));
 
 /** Applications reliées et cochées, avec leurs données (une application qui ne répond pas n'empêche pas les autres). */
-async function lireApplications(e: Enseignant) {
+async function lireApplications(e: Enseignant, frais = false) {
   const f = await fiche(e);
   const choisies: string[] | null = Array.isArray(f.choisies) ? f.choisies : null;
   const reliees = APPLICATIONS.filter(a => a.eleves && parPorte(a) && f.apps?.[a.id]?.email && (!choisies || choisies.includes(a.id)));
   const lus = await Promise.all(reliees.map(async a => {
-    try { return { app: a, d: await donnees(a, f.apps[a.id].email) as Donnees | null, erreur: null as string | null }; } catch (err: any) {
+    try { return { app: a, d: await donnees(a, f.apps[a.id].email, frais) as Donnees | null, erreur: null as string | null }; } catch (err: any) {
       // Application momentanément injoignable : on garde ses derniers résultats lus (moins de 12 heures).
       const ancien = cacheDonnees.get(`${a.id}:${f.apps[a.id].email}`);
       if (ancien && Date.now() - ancien.at < 12 * 3600e3) {
@@ -399,13 +400,14 @@ async function lireApplications(e: Enseignant) {
 type Resultat = { percent: number; score: string; at: number | null };
 
 /** Résultats de l'enseignant rangés par élève de référence (le plus récent essai pour chaque exercice). */
-async function calculerTableau(e: Enseignant) {
-  const lus = await lireApplications(e);
+async function calculerTableau(e: Enseignant, frais = false) {
+  const lus = await lireApplications(e, frais);
   const ok = lus.filter((l): l is { app: Application; d: Donnees; erreur: null } => !!l.d);
   const rap = await rapprocher(ok);
   const { provisoire, resultat } = rap;
   // Élèves et classes que l'enseignant ne suit pas (comptes de test, anciens élèves…) : absents du tableau et du bulletin.
-  const exclu = estExclu(await fiche(e));
+  const fe = await fiche(e);
+  const exclu = estExclu(fe);
   const refs = rap.refs.filter(r => !exclu(r));
   const gardes = new Set(refs.map(r => r.id));
   const refDe = new Map(resultat.filter(r => r.refId && gardes.has(r.refId)).map(r => [`${r.app}:${r.studentId}`, r.refId as string]));
@@ -428,7 +430,8 @@ async function calculerTableau(e: Enseignant) {
       id: l.app.id, code: l.app.code, nom: l.app.nom, erreur: l.erreur,
       exercices: (l.d?.exercises || []).filter(x => l.d!.results.some(r => r.exerciseId === x.id)).map(x => ({ id: x.id, titre: x.title })),
     })),
-    aVerifier: resultat.filter(r => r.statut === "a_verifier" || r.statut === "aucun").length,
+    aVerifier: resultat.filter(r => (r.statut === "a_verifier" || r.statut === "aucun") && !exclu({ id: "", nom: r.nom, prenom: "", classe: r.classe })).length,
+    masquees: Array.isArray(fe.colonnesMasquees) ? fe.colonnesMasquees.map(String) as string[] : [],
   };
 }
 
@@ -437,17 +440,19 @@ function lireExclus(f: any): { eleves: string[]; classes: string[] } {
   const x = f?.exclus || {};
   return { eleves: Array.isArray(x.eleves) ? x.eleves.map(String) : [], classes: Array.isArray(x.classes) ? x.classes.map(String) : [] };
 }
+/** Comptes de test (« Test Prof », « Élève test », classe « classe-test ») : jamais suivis. */
+const estTest = (...textes: string[]) => textes.some(t => /(^| )tests?( |$)/.test(normaliser(t)));
 function estExclu(f: any) {
   const x = lireExclus(f);
   const eleves = new Set(x.eleves), classes = new Set(x.classes);
-  return (r: EleveRef) => eleves.has(r.id) || classes.has(cleClasse(r.classe));
+  return (r: EleveRef) => eleves.has(r.id) || classes.has(cleClasse(r.classe)) || estTest(r.nom, r.prenom, r.classe);
 }
 
 const parNom = (a: EleveRef, b: EleveRef) => a.classe.localeCompare(b.classe, "fr") || a.nom.localeCompare(b.nom, "fr") || a.prenom.localeCompare(b.prenom, "fr");
 
 // Tableau en direct : une ligne par élève, un bloc par application.
 app.get("/api/tableau", exigerEnseignant(), route(async (req, res) => {
-  const t = await calculerTableau(ensDe(req));
+  const t = await calculerTableau(ensDe(req), req.query.frais === "1");
   res.json({
     provisoire: t.provisoire,
     applications: t.applications,
@@ -456,6 +461,7 @@ app.get("/api/tableau", exigerEnseignant(), route(async (req, res) => {
       resultats: Object.fromEntries(Object.entries(t.essais.get(r.id) || {}).map(([k, v]) => [k, t.plusRecent(v)])),
     })),
     aVerifier: t.aVerifier,
+    masquees: t.masquees,
     lu: Date.now(),
   });
 }));
@@ -657,11 +663,13 @@ app.get("/api/correspondances", exigerEnseignant(), route(async (req, res) => {
   const lus = await lireApplications(ensDe(req));
   const ok = lus.filter((l): l is { app: Application; d: Donnees; erreur: null } => !!l.d);
   const { refs, provisoire, resultat } = await rapprocher(ok);
+  const f = await fiche(ensDe(req));
+  const exclu = estExclu(f);
   res.json({
     provisoire,
-    exclus: lireExclus(await fiche(ensDe(req))),
+    exclus: lireExclus(f),
     references: refs.map(r => ({ id: r.id, classe: r.classe, nom: r.nom, prenom: r.prenom })),
-    eleves: resultat.map(r => ({ ...r, appNom: appParId(r.app)?.nom || r.app })),
+    eleves: resultat.map(r => ({ ...r, appNom: appParId(r.app)?.nom || r.app, exclu: exclu({ id: r.refId || "", nom: r.nom, prenom: "", classe: r.classe }) })),
   });
 }));
 
@@ -681,6 +689,15 @@ app.post("/api/correspondances", exigerEnseignant(), route(async (req, res) => {
   }
   await db.doc(`correspondances/${cleCorr(a.id, studentId)}`).set({ refId, par: e.email, le: new Date().toISOString() });
   res.json({ ok: true });
+}));
+
+// Colonnes du tableau que l'enseignant a masquées (« app:exercice »).
+app.post("/api/colonnes-masquees", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const masquees = Array.from(new Set((Array.isArray(req.body?.masquees) ? req.body.masquees : []).map((x: unknown) => String(x ?? "").slice(0, 300)).filter(Boolean))).slice(0, 2000);
+  await fiche(e);
+  await db.doc(`enseignants/${e.uid}`).set({ colonnesMasquees: masquees }, { merge: true });
+  res.json({ ok: true, masquees });
 }));
 
 // Élèves et classes que l'enseignant ne suit pas : la liste complète remplace la précédente.
