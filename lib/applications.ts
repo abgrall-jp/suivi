@@ -19,6 +19,7 @@ export const APPLICATIONS: Application[] = [
   { id: "planclasse", code: "PDC", nom: "Plan de classe IA", url: "https://planclasse.jepeuxapprendre.fr", eleves: true, lecture: "planclasse" },
   { id: "appreciations", code: "APP", nom: "Studio d'Appréciations", url: "https://appreciations.jepeuxapprendre.fr", eleves: true, lecture: "studio" },
   { id: "quiz", code: "QUIZ", nom: "Quiz IA", url: "https://quiz.jepeuxapprendre.fr", eleves: true },
+  { id: "edublockly", code: "EBK", nom: "EduBlockly Micro:bit", url: "https://edublockly.jepeuxapprendre.fr", eleves: true, parents: false },
   { id: "conception", code: "CNC", nom: "Assistant Conception Pédagogique", url: "https://conception.jepeuxapprendre.fr", eleves: false },
   { id: "maths", code: "MTH", nom: "Générateur de Problèmes de Maths", url: "https://maths.jepeuxapprendre.fr", eleves: false },
   { id: "motsmeles", code: "MML", nom: "Mots mêlés", url: "https://motsmeles.jepeuxapprendre.fr", eleves: false },
