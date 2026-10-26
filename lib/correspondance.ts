@@ -58,6 +58,13 @@ export function decider(nomApp: string, classeApp: string, refs: EleveRef[]): De
     else if (n === "probable") probables.push(ref.id);
   }
   if (surs.length === 1) return { statut: "auto", refId: surs[0] };
+  // Même nom et même prénom, écrits à l'identique, chez un seul élève : sûr, même si la classe est écrite autrement
+  // d'une application à l'autre (« 201 » et « 2nde 1 »).
+  if (!surs.length) {
+    const cle = [...jetons(nomApp)].sort().join(" ");
+    const memes = cle ? refs.filter(r => [...jetons(r.prenom), ...jetons(r.nom)].sort().join(" ") === cle) : [];
+    if (memes.length === 1) return { statut: "auto", refId: memes[0].id };
+  }
   const candidats = [...surs, ...probables];
   return candidats.length ? { statut: "a_verifier", candidats: candidats.slice(0, 5) } : { statut: "aucun" };
 }

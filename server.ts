@@ -109,21 +109,26 @@ const estPrete = (a: Application) => (parPorte(a) ? !!cleDe(a) : a.lecture === "
 async function porte(a: Application, chemin: string, body?: any): Promise<any> {
   const cle = cleDe(a);
   if (!cle) throw httpError(409, `${a.nom} n'est pas encore reliée à Suivi.`);
-  let r: globalThis.Response;
-  try {
-    r = await fetch(urlDe(a) + chemin, {
-      method: body ? "POST" : "GET",
-      headers: { "X-Suivi-Cle": cle, ...(body ? { "Content-Type": "application/json" } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(15000),
-    });
-  } catch {
-    throw httpError(502, `${a.nom} ne répond pas pour le moment.`);
+  // Une lecture qui échoue (application en train de redémarrer, erreur passagère de l'hébergeur) est refaite une fois.
+  for (let essai = 1; ; essai++) {
+    let r: globalThis.Response;
+    try {
+      r = await fetch(urlDe(a) + chemin, {
+        method: body ? "POST" : "GET",
+        headers: { "X-Suivi-Cle": cle, ...(body ? { "Content-Type": "application/json" } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(20000),
+      });
+    } catch {
+      if (!body && essai === 1) { await new Promise(ok => setTimeout(ok, 1500)); continue; }
+      throw httpError(502, `${a.nom} ne répond pas pour le moment.`);
+    }
+    let data: any = {};
+    try { data = await r.json(); } catch {}
+    if (r.ok) return data;
+    if (!body && essai === 1 && r.status >= 500) { await new Promise(ok => setTimeout(ok, 1500)); continue; }
+    throw httpError(r.status === 404 ? 404 : 502, data?.error || `${a.nom} a refusé la demande (erreur ${r.status}). Réessayez dans un instant ; si cela continue, redémarrez ${a.nom} dans cPanel.`);
   }
-  let data: any = {};
-  try { data = await r.json(); } catch {}
-  if (!r.ok) throw httpError(r.status === 404 ? 404 : 502, data?.error || `${a.nom} a refusé la demande (${r.status}).`);
-  return data;
 }
 
 // --- Petits outils ---------------------------------------------------------------------
@@ -378,7 +383,15 @@ async function lireApplications(e: Enseignant) {
   const choisies: string[] | null = Array.isArray(f.choisies) ? f.choisies : null;
   const reliees = APPLICATIONS.filter(a => a.eleves && parPorte(a) && f.apps?.[a.id]?.email && (!choisies || choisies.includes(a.id)));
   const lus = await Promise.all(reliees.map(async a => {
-    try { return { app: a, d: await donnees(a, f.apps[a.id].email), erreur: null as string | null }; } catch (err: any) { return { app: a, d: null, erreur: String(err?.message || err) }; }
+    try { return { app: a, d: await donnees(a, f.apps[a.id].email) as Donnees | null, erreur: null as string | null }; } catch (err: any) {
+      // Application momentanément injoignable : on garde ses derniers résultats lus (moins de 12 heures).
+      const ancien = cacheDonnees.get(`${a.id}:${f.apps[a.id].email}`);
+      if (ancien && Date.now() - ancien.at < 12 * 3600e3) {
+        const heure = new Date(ancien.at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Paris" });
+        return { app: a, d: ancien.data as Donnees | null, erreur: `${String(err?.message || err)} Résultats lus à ${heure} affichés.` };
+      }
+      return { app: a, d: null, erreur: String(err?.message || err) };
+    }
   }));
   return lus;
 }

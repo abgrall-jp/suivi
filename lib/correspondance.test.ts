@@ -35,6 +35,10 @@ test("autre classe : jamais sûr", () => {
   assert.equal(comparer("Léa Martin", "4C", refs[0]), "probable");
 });
 
+test("même nom chez un seul élève, classe écrite autrement : sûr", () => {
+  assert.deepEqual(decider("Léa Martin", "2nde 1", refs), { statut: "auto", refId: "lea" });
+});
+
 test("inconnu : aucun", () => {
   assert.deepEqual(decider("Zoé Durand", "5A", refs), { statut: "aucun" });
 });

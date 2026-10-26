@@ -103,3 +103,7 @@ td .note { font-weight: 600; margin-right: 0.4em; }
 .etiquettes { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
 .etiquette.exclue { text-decoration: line-through; opacity: .7; }
 .choix-eleve input, .barre input[type=search] { width: 320px; max-width: 100%; }
+/* Titres très longs (compétences d'Edubot…) : 4 lignes au plus, le titre complet au survol */
+.tableau th .titre-col { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.tableau th .titre-col.seul { -webkit-line-clamp: 4; font-weight: 500; }
+.tableau th .ligne-col { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
