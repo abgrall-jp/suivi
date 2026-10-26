@@ -5,8 +5,9 @@ import { api, type Correspondances, type Moi, type Tableau } from "./api.ts";
 import { ReglagesAdmin, VueBulletin, VueProfPrincipal } from "./Bulletin.tsx";
 import { ParentsOubli, VueParents } from "./Parents.tsx";
 import { EnteteColonne, sansAccent } from "./outils.tsx";
+import { BoutonPublier, EspaceFamille, VueCodesFamille } from "./Famille.tsx";
 
-type Onglet = "tableau" | "bulletin" | "pp" | "parents" | "applications" | "correspondances" | "eleves";
+type Onglet = "tableau" | "bulletin" | "familles" | "pp" | "parents" | "applications" | "correspondances" | "eleves";
 
 const messageAuth = (e: any) => {
   const code = String(e?.code || "");
@@ -20,6 +21,7 @@ const messageAuth = (e: any) => {
 export default function App() {
   // Page publique pour les parents : pas de connexion.
   if (location.pathname.replace(/\/+$/, "") === "/parents") return <ParentsOubli />;
+  if (location.pathname.replace(/\/+$/, "") === "/famille") return <EspaceFamille />;
   return <Enseignants />;
 }
 
@@ -58,6 +60,7 @@ function Enseignants() {
         <nav>
           <button className={onglet === "tableau" ? "actif" : ""} onClick={() => setOnglet("tableau")}>Tableau</button>
           <button className={onglet === "bulletin" ? "actif" : ""} onClick={() => setOnglet("bulletin")}>Bulletin</button>
+          <button className={onglet === "familles" ? "actif" : ""} onClick={() => setOnglet("familles")}>Familles</button>
           {!!pp?.classes.length && <button className={onglet === "pp" ? "actif" : ""} onClick={() => setOnglet("pp")}>Prof principal</button>}
           {!!pp?.gerees.length && <button className={onglet === "parents" ? "actif" : ""} onClick={() => setOnglet("parents")}>Parents</button>}
           <button className={onglet === "applications" ? "actif" : ""} onClick={() => setOnglet("applications")}>Mes applications</button>
@@ -71,6 +74,7 @@ function Enseignants() {
       <main>
         {onglet === "tableau" && <VueTableau moi={moi} onAVerifier={setAVerifier} allerA={setOnglet} />}
         {onglet === "bulletin" && <VueBulletin />}
+        {onglet === "familles" && <VueCodesFamille />}
         {onglet === "pp" && pp && <VueProfPrincipal classes={pp.classes} periodes={pp.periodes} />}
         {onglet === "parents" && pp && <VueParents classes={pp.gerees} />}
         {onglet === "applications" && <MesApplications moi={moi} onChange={chargerMoi} />}
@@ -327,6 +331,9 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
         </select>
         <input type="search" placeholder="Chercher une colonne (ex. : 4e Séq. 2)" value={cherche} onChange={e => setCherche(e.target.value)} />
         <button onClick={() => charger(true)}>Actualiser</button>
+        {classe && <BoutonPublier publieLe={t?.publiees?.[cleCl(classe)] || null}
+          onPublier={async () => { try { await api("/api/publier/tableau", { classe }); await charger(); } catch (e: any) { setMsg(e.message); } }}
+          onRetirer={async () => { try { await api("/api/publier/tableau", { classe, retirer: true }); await charger(); } catch (e: any) { setMsg(e.message); } }} />}
         {masquees.length > 0 && <button onClick={() => setVoirMasquees(!voirMasquees)}>Colonnes masquées ({masquees.length})</button>}
         {!!apps.length && <span className="defilement"><button title="Voir les colonnes de gauche" onClick={() => decaler(-1)}>◀</button><button title="Voir les colonnes de droite" onClick={() => decaler(1)}>▶</button></span>}
         {t && <span className="petit">Mis à jour à {new Date(t.lu).toLocaleTimeString("fr-FR")}</span>}
@@ -379,6 +386,8 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
     </section>
   );
 }
+
+const cleCl = (s: string) => sansAccent(s).replace(/[^a-z0-9]/g, "").replace(/^(\d+)(ieme|eme|em|e)?/, "$1");
 
 // --- Correspondances des noms --------------------------------------------------------------------
 const libelleStatut: Record<string, string> = { confirme: "Confirmé", auto: "Reconnu", a_verifier: "À vérifier", aucun: "Introuvable", ignore: "Ignoré" };
@@ -437,7 +446,6 @@ function VueCorrespondances({ onChange }: { onChange: (n: number) => void }) {
   const refDe = new Map(c.references.map(r => [r.id, r]));
   const nomRef = (id: string) => { const r = refDe.get(id); return r ? `${nomComplet(r)} (${r.classe})` : id; };
   const ordre = ["a_verifier", "aucun", "ignore", "confirme", "auto"];
-  const cleCl = (s: string) => sansAccent(s).replace(/[^a-z0-9]/g, "").replace(/^(\d+)(ieme|eme|em|e)?/, "$1");
   const classeExclue = (classe: string) => c.exclus.classes.includes(cleCl(classe));
   const lignes = c.eleves.filter(e => (tous || e.statut === "a_verifier" || e.statut === "aucun") && !classeExclue(e.classe) && (tous || !e.exclu))
     .sort((a, b) => ordre.indexOf(a.statut) - ordre.indexOf(b.statut) || a.classe.localeCompare(b.classe, "fr") || a.nom.localeCompare(b.nom, "fr"));

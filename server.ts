@@ -8,7 +8,8 @@ import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { cleClasse, decider, lireListe, normaliser, type EleveRef } from "./lib/correspondance.ts";
 import { APPLICATIONS, type Application } from "./lib/applications.ts";
-import { empreinte, genererMotDePasse } from "./lib/parents.ts";
+import { correspond, empreinte, genererMotDePasse } from "./lib/parents.ts";
+import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, signerJeton } from "./lib/famille.ts";
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
 import { plansDe, remarquesParEleve, type PlanPublie, type RemarqueEleve } from "./lib/planclasse.ts";
 import { dateValide, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
@@ -462,6 +463,8 @@ app.get("/api/tableau", exigerEnseignant(), route(async (req, res) => {
     })),
     aVerifier: t.aVerifier,
     masquees: t.masquees,
+    publiees: Object.fromEntries((await db.collection("publications").where("uid", "==", ensDe(req).uid).get()).docs
+      .filter(d => d.get("type") === "tableau").map(d => [String(d.get("classe")), String(d.get("publieLe"))])),
     lu: Date.now(),
   });
 }));
@@ -548,6 +551,7 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
   res.json({
     periodes: per, classes, colonnesDispo, trimestre, classe,
     colonnes, externes, eleves, studioRelie: !!f.apps?.appreciations,
+    publieLe: (await db.doc(`publications/${e.uid}__bulletin__${trimestre}__${classe}`).get()).get("publieLe") || null,
   });
 }));
 
@@ -776,6 +780,7 @@ const texteMail = (prenomEnfant: string, nomEnfant: string, mdp: string, apps: s
   `Il est personnel : l'autre parent reçoit le sien.\n` +
   (apps.length ? `Il sert dans : ${apps.join(", ")}.\n` : "") +
   `Dans chaque application, choisissez « Parent », puis votre enfant, et écrivez ce mot de passe.\n\n` +
+  `Les résultats et le bulletin publiés par les enseignants : ${ADRESSE}/famille (votre adresse e-mail et ce mot de passe).\n\n` +
   `Mot de passe perdu ? Demandez-en un nouveau ici : ${ADRESSE}/parents\n\nBonne journée.`;
 
 /** Nouveau mot de passe pour ces parents : empreinte envoyée aux applications, puis e-mail. */
@@ -855,6 +860,167 @@ app.post("/api/parents/oubli", route(async (req, res) => {
   }
   // Même réponse que l'adresse soit connue ou non.
   res.json({ ok: true });
+}));
+
+// --- Espace des familles ------------------------------------------------------------------------
+// L'élève et ses parents voient seulement ce que les enseignants ont publié pour lui : une copie du tableau de sa classe
+// (colonnes non masquées) et le bulletin validé. publications/{uid}__tableau__{classe} et {uid}__bulletin__{trimestre}__{classe}
+// gardent une ligne par élève ; la famille ne reçoit que la sienne. Accès par code personnel (codesFamille/{empreinte})
+// ou par le mot de passe parent (collection parents).
+let secretFamille: string | null = process.env.SUIVI_SECRET || null;
+async function secret(): Promise<string> {
+  if (secretFamille) return secretFamille;
+  const ref = db.doc("reglages/secretFamille");
+  const s = await db.runTransaction(async tx => {
+    const d = await tx.get(ref);
+    if (d.exists && d.get("s")) return String(d.get("s"));
+    const nouveau = crypto.randomBytes(32).toString("hex");
+    tx.set(ref, { s: nouveau });
+    return nouveau;
+  });
+  return (secretFamille = s);
+}
+
+/** Élèves suivis de cette classe chez cet enseignant (ceux qui ont un compte dans ses applications). */
+function elevesSuivis(t: Awaited<ReturnType<typeof calculerTableau>>, classe: string) {
+  return elevesDeClasse(t, classe).filter(r => t.presents.has(r.id));
+}
+const nomEnseignant = async (e: Enseignant) => {
+  const f = await fiche(e);
+  const nomAppli = Object.values<any>(f.apps || {}).map(a => a?.nomDansAppli).find(Boolean);
+  return (e.nom.includes("@") || e.nom === e.email.split("@")[0]) && nomAppli ? String(nomAppli) : e.nom;
+};
+
+app.post("/api/publier/tableau", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const classe = cleClasse(String(req.body?.classe || ""));
+  if (!classe || classe.length > 40) throw httpError(400, "Choisissez d'abord une classe.");
+  const ref = db.doc(`publications/${e.uid}__tableau__${classe}`);
+  if (req.body?.retirer) { await ref.delete(); return res.json({ ok: true }); }
+  const t = await calculerTableau(e, true);
+  const eleves = elevesSuivis(t, classe);
+  if (!eleves.length) throw httpError(404, "Aucun élève suivi dans cette classe.");
+  const colonnes = t.applications.flatMap(a => a.exercices.map(x => ({ cle: `${a.id}:${x.id}`, app: a.nom, titre: x.titre })))
+    .filter(c => !t.masquees.includes(c.cle) && eleves.some(r => t.essais.get(r.id)?.[c.cle]?.length));
+  const lignes: Record<string, Record<string, { percent: number; score: string }>> = {};
+  for (const r of eleves) {
+    const ess = t.essais.get(r.id) || {};
+    lignes[r.id] = Object.fromEntries(colonnes.filter(c => ess[c.cle]?.length).map(c => {
+      const x = t.plusRecent(ess[c.cle]);
+      return [c.cle, { percent: Math.round(x.percent), score: x.score }];
+    }));
+  }
+  const publieLe = new Date().toISOString();
+  await ref.set({
+    type: "tableau", uid: e.uid, enseignant: await nomEnseignant(e), classe, classeNom: eleves[0].classe, publieLe,
+    colonnes, lignes, refIds: eleves.map(r => r.id), noms: Object.fromEntries(eleves.map(r => [r.id, { nom: r.nom, prenom: r.prenom, classe: r.classe }])),
+  });
+  res.json({ ok: true, publieLe, eleves: eleves.length, colonnes: colonnes.length });
+}));
+
+app.post("/api/publier/bulletin", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const { trimestre, classe } = lireTrimestreClasse(req.body);
+  const ref = db.doc(`publications/${e.uid}__bulletin__${trimestre}__${classe}`);
+  if (req.body?.retirer) { await ref.delete(); return res.json({ ok: true }); }
+  const b = (await db.doc(`bulletins/${idBulletin(e.uid, trimestre, classe)}`).get()).data();
+  if (!b?.colonnes?.length) throw httpError(409, "Choisissez d'abord les notes à reprendre.");
+  const per = await periodes();
+  const t = await calculerTableau(e, true);
+  const refs = elevesDeClasse(t, classe);
+  const colonnes = (b.colonnes as any[]).map(c => ({ cle: String(c.cle), titre: String(c.titre || ""), coef: lireCoef(c.coef) }));
+  const externes: { id: string; titre: string }[] = Array.isArray(b.externes) ? b.externes : [];
+  const eleves: Record<string, any> = {};
+  for (const r of refs) {
+    const n = b.eleves?.[r.id] || {};
+    const ess = t.essais.get(r.id) || {};
+    const calculee = noteSur20(ess, colonnes, per[trimestre]);
+    eleves[r.id] = {
+      notes: Object.fromEntries(colonnes.map(c => [c.cle, noteColonne(ess[c.cle], per[trimestre])])),
+      moyenne: typeof n.finale === "number" ? n.finale : calculee, definitive: typeof n.finale === "number",
+      externes: Object.fromEntries(externes.map(x => [x.id, n.externes?.[x.id] ?? null])), appreciation: String(n.appreciation || ""),
+    };
+  }
+  const publieLe = new Date().toISOString();
+  await ref.set({
+    type: "bulletin", uid: e.uid, enseignant: await nomEnseignant(e), trimestre, classe, classeNom: refs[0]?.classe || classe, publieLe,
+    colonnes, externes, eleves, refIds: refs.map(r => r.id), noms: Object.fromEntries(refs.map(r => [r.id, { nom: r.nom, prenom: r.prenom, classe: r.classe }])),
+  });
+  res.json({ ok: true, publieLe, eleves: refs.length });
+}));
+
+// Codes personnels : l'enseignant les crée pour une classe et les imprime. Un code n'est montré qu'à sa création.
+app.get("/api/famille/codes", exigerEnseignant(), route(async (req, res) => {
+  const classe = cleClasse(String(req.query.classe || ""));
+  const t = await calculerTableau(ensDe(req));
+  const eleves = elevesSuivis(t, classe);
+  const docs = eleves.length ? await db.getAll(...eleves.map(r => db.doc(`codesEleves/${r.id}`))) : [];
+  res.json({ eleves: eleves.map((r, i) => ({ id: r.id, nom: r.nom, prenom: r.prenom, classe: r.classe, codeLe: docs[i]?.get("le") || null })) });
+}));
+
+app.post("/api/famille/codes", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const classe = cleClasse(String(req.body?.classe || ""));
+  const t = await calculerTableau(e);
+  const voulus = Array.isArray(req.body?.refIds) ? new Set(req.body.refIds.map(String)) : null;
+  const eleves = elevesSuivis(t, classe).filter(r => !voulus || voulus.has(r.id));
+  const sec = await secret();
+  const existants = eleves.length ? await db.getAll(...eleves.map(r => db.doc(`codesEleves/${r.id}`))) : [];
+  const codes: { id: string; nom: string; prenom: string; classe: string; code: string }[] = [];
+  const le = new Date().toISOString();
+  for (const [i, r] of eleves.entries()) {
+    // Sans demande précise, seuls les élèves sans code en reçoivent un (les fiches déjà distribuées restent valables).
+    if (!voulus && existants[i]?.exists) continue;
+    const code = genererCode();
+    const h = empreinteCodeFamille(code, sec);
+    const lot = db.batch();
+    if (existants[i]?.get("h")) lot.delete(db.doc(`codesFamille/${existants[i].get("h")}`));
+    lot.set(db.doc(`codesFamille/${h}`), { refId: r.id, par: e.email, le });
+    lot.set(db.doc(`codesEleves/${r.id}`), { h, par: e.email, le });
+    await lot.commit();
+    codes.push({ id: r.id, nom: r.nom, prenom: r.prenom, classe: r.classe, code });
+  }
+  res.json({ codes, adresse: `${ADRESSE}/famille` });
+}));
+
+const limiteFamille = makeLimiter(10, 15 * 60 * 1000);
+app.post("/api/famille/connexion", route(async (req, res) => {
+  if (!limiteFamille(String(req.ip))) throw httpError(429, "Trop d'essais. Réessayez dans un quart d'heure.");
+  const sec = await secret();
+  let refIds: string[] = [];
+  if (req.body?.code) {
+    const d = await db.doc(`codesFamille/${empreinteCodeFamille(String(req.body.code), sec)}`).get();
+    if (d.exists) refIds = [String(d.get("refId"))];
+  } else {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const mdp = String(req.body?.motDePasse || "").trim();
+    if (emailValide(email) && mdp) {
+      const snap = await db.collection("parents").where("email", "==", email).get();
+      refIds = Array.from(new Set(snap.docs.filter(d => correspond(mdp, String(d.get("empreinte")))).map(d => String(d.get("refId")))));
+    }
+  }
+  if (!refIds.length) throw httpError(401, req.body?.code ? "Code incorrect." : "Adresse ou mot de passe incorrect.");
+  const refs = await elevesReference();
+  res.json({ enfants: refIds.map(id => { const r = refs.find(x => x.id === id); return { jeton: signerJeton(id, sec), prenom: r?.prenom || "", nom: r?.nom || "" }; }) });
+}));
+
+app.get("/api/famille", route(async (req, res) => {
+  const h = String(req.headers.authorization || "");
+  const refId = h.startsWith("Famille ") ? lireJeton(h.slice(8).trim(), await secret()) : null;
+  if (!refId) throw httpError(401, "Connectez-vous avec votre code.");
+  const snap = await db.collection("publications").where("refIds", "array-contains", refId).get();
+  const docs = snap.docs.map(d => d.data());
+  const nom = docs.map(d => d.noms?.[refId]).find(Boolean) || null;
+  const tableaux = docs.filter(d => d.type === "tableau").map(d => ({
+    enseignant: d.enseignant, classe: d.classeNom, publieLe: d.publieLe,
+    colonnes: (d.colonnes || []).map((c: any) => ({ cle: c.cle, app: c.app, titre: c.titre })), resultats: d.lignes?.[refId] || {},
+  })).sort((a, b) => String(a.enseignant).localeCompare(String(b.enseignant), "fr"));
+  const bulletins = docs.filter(d => d.type === "bulletin").map(d => ({
+    enseignant: d.enseignant, classe: d.classeNom, trimestre: d.trimestre, publieLe: d.publieLe,
+    colonnes: d.colonnes || [], externes: d.externes || [], notes: d.eleves?.[refId]?.notes || {}, moyenne: d.eleves?.[refId]?.moyenne ?? null,
+    definitive: !!d.eleves?.[refId]?.definitive, externesNotes: d.eleves?.[refId]?.externes || {}, appreciation: d.eleves?.[refId]?.appreciation || "",
+  })).sort((a, b) => String(b.trimestre).localeCompare(String(a.trimestre)) || String(a.enseignant).localeCompare(String(b.enseignant), "fr"));
+  res.json({ eleve: nom, tableaux, bulletins });
 }));
 
 // Professeurs principaux et dates des trimestres (administrateur).

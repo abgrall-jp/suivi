@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.ts";
 import { EnteteColonne } from "./outils.tsx";
+import { BoutonPublier } from "./Famille.tsx";
 
 type Trimestre = "T1" | "T2" | "T3";
 type Periodes = Record<Trimestre, { debut: string; fin: string }>;
@@ -13,7 +14,7 @@ type LigneBulletin = {
 };
 type Bulletin = {
   periodes: Periodes; classes: { cle: string; nom: string }[]; colonnesDispo: Colonne[];
-  colonnes?: Colonne[]; externes?: Externe[]; eleves?: LigneBulletin[]; studioRelie?: boolean;
+  colonnes?: Colonne[]; externes?: Externe[]; eleves?: LigneBulletin[]; studioRelie?: boolean; publieLe?: string | null;
 };
 
 const TRIMESTRES: Trimestre[] = ["T1", "T2", "T3"];
@@ -95,6 +96,9 @@ export function VueBulletin() {
           try { const r = await api<{ figees: number }>("/api/bulletin/figer", { trimestre, classe }); setInfo(`${r.figees} note${r.figees > 1 ? "s" : ""} figée${r.figees > 1 ? "s" : ""}.`); charger(); } catch (e: any) { setMsg(e.message); }
         }}>Figer les notes</button>}
         {pret && <button onClick={exporter}>Exporter (tableur)</button>}
+        {pret && <BoutonPublier publieLe={b.publieLe || null}
+          onPublier={async () => { try { await api("/api/publier/bulletin", { trimestre, classe }); setInfo("Bulletin publié : chaque élève et ses parents voient leur ligne dans l'espace Famille."); await charger(); } catch (e: any) { setMsg(e.message); } }}
+          onRetirer={async () => { try { await api("/api/publier/bulletin", { trimestre, classe, retirer: true }); await charger(); } catch (e: any) { setMsg(e.message); } }} />}
       </div>
       {msg && <p className="erreur">{msg}</p>}
       {info && <p className="info">{info}</p>}
