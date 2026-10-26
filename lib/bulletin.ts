@@ -26,21 +26,40 @@ export function bornes(p: { debut: string; fin: string }) {
   return { debut: Date.parse(`${p.debut}T00:00:00Z`) - 2 * 3600e3, fin: Date.parse(`${p.fin}T23:59:59Z`) };
 }
 
-/**
- * Note sur 20 d'un élève : moyenne des colonnes retenues, chaque colonne valant le dernier essai fait pendant le trimestre.
- * Un essai sans date compte toujours. Aucune colonne avec résultat : pas de note.
- */
-export function noteSur20(essais: Record<string, Essai[]>, colonnes: string[], periode: { debut: string; fin: string }): number | null {
+export type ColonneNote = { cle: string; coef?: number };
+
+/** Coefficient d'une colonne : de 0,5 à 10, 1 par défaut. */
+export function lireCoef(v: unknown): number {
+  const n = typeof v === "number" ? v : Number(String(v ?? "").replace(",", ".").trim());
+  return Number.isFinite(n) && n > 0 ? Math.min(10, Math.max(0.5, Math.round(n * 2) / 2)) : 1;
+}
+
+/** Note sur 20 d'une colonne : le dernier essai fait pendant le trimestre (un essai sans date compte toujours). */
+export function noteColonne(essais: Essai[] | undefined, periode: { debut: string; fin: string }): number | null {
   const { debut, fin } = bornes(periode);
-  const valeurs: number[] = [];
+  const dansPeriode = (essais || []).filter(e => e.at === null || (e.at >= debut && e.at <= fin));
+  if (!dansPeriode.length) return null;
+  const dernier = dansPeriode.reduce((m, x) => ((x.at ?? 0) >= (m.at ?? 0) ? x : m));
+  return Math.round(Math.max(0, Math.min(100, dernier.percent)) / 5 * 10) / 10;
+}
+
+/**
+ * Note sur 20 d'un élève : moyenne des colonnes retenues, pondérée par leur coefficient.
+ * Aucune colonne avec résultat : pas de note.
+ */
+export function noteSur20(essais: Record<string, Essai[]>, colonnes: (string | ColonneNote)[], periode: { debut: string; fin: string }): number | null {
+  const { debut, fin } = bornes(periode);
+  let somme = 0, poids = 0;
   for (const c of colonnes) {
-    const dansPeriode = (essais[c] || []).filter(e => e.at === null || (e.at >= debut && e.at <= fin));
+    const cle = typeof c === "string" ? c : c.cle;
+    const coef = typeof c === "string" ? 1 : lireCoef(c.coef);
+    const dansPeriode = (essais[cle] || []).filter(e => e.at === null || (e.at >= debut && e.at <= fin));
     if (!dansPeriode.length) continue;
     const dernier = dansPeriode.reduce((m, x) => ((x.at ?? 0) >= (m.at ?? 0) ? x : m));
-    valeurs.push(Math.max(0, Math.min(100, dernier.percent)));
+    somme += Math.max(0, Math.min(100, dernier.percent)) * coef; poids += coef;
   }
-  if (!valeurs.length) return null;
-  return Math.round((valeurs.reduce((s, v) => s + v, 0) / valeurs.length / 5) * 10) / 10;
+  if (!poids) return null;
+  return Math.round((somme / poids / 5) * 10) / 10;
 }
 
 /** Note saisie à la main (sur 20, virgule acceptée) : nombre arrondi au dixième, null pour effacer, undefined si incorrecte. */

@@ -153,6 +153,26 @@ t('le tableau n’est pas gêné par le Studio', (await jean('/api/tableau')).da
 t('Alice : (50 % + 90 %) / 2 = 14 / 20', ligne('5b_durand_alice')?.calculee === 14, bu.eleves);
 t('Bob : (0 % + 70 %) / 2 = 7 / 20', ligne('5b_leroy_bob')?.calculee === 7);
 t('Chloé (aucun résultat) : dans le bulletin, sans note', ligne('5b_petit_chloe')?.calculee === null);
+t('notes de chaque colonne sur 20 pour Alice', ligne('5b_durand_alice')?.notes?.['memoriser:deck_verbes'] === 10 && ligne('5b_durand_alice')?.notes?.['textetrous:ex1'] === 18, ligne('5b_durand_alice'));
+await jean('/api/bulletin/colonnes', { trimestre: 'T1', classe: '5B', colonnes: bu.colonnesDispo.map(c => ({ ...c, coef: c.cle === 'memoriser:deck_verbes' ? 3 : 1 })), externes: [{ id: 'oral', titre: 'Oral' }] });
+let buc = (await jean('/api/bulletin?trimestre=T1&classe=5B')).data;
+t('coefficient 3 sur Mémoriser : Alice (50×3 + 90) / 4 = 12 / 20', buc.eleves.find(e => e.id === '5b_durand_alice')?.calculee === 12 && buc.colonnes.find(c => c.cle === 'memoriser:deck_verbes')?.coef === 3, buc.colonnes);
+t('coefficient incorrect : ramené à 1', (await jean('/api/bulletin/colonnes', { trimestre: 'T1', classe: '5B', colonnes: bu.colonnesDispo.map(c => ({ ...c, coef: 'abc' })), externes: [{ id: 'oral', titre: 'Oral' }] })).status === 200
+  && (await jean('/api/bulletin?trimestre=T1&classe=5B')).data.colonnes.every(c => c.coef === 1));
+await studio.collection('appreciations').doc('premium_bob').set({ teacherId: uidJean, studentName: 'LEROY Bob', className: '5B', period: 'Trimestre 1', text: 'Bob progresse.', createdAt: '2026-10-20T10:00:00.000Z' });
+buc = (await jean('/api/bulletin?trimestre=T1&classe=5B')).data;
+t('appréciation d’une séance de classe du Studio (period, createdAt) reprise pour Bob', buc.eleves.find(e => e.id === '5b_leroy_bob')?.studio?.prof === 'Bob progresse.', buc.eleves.find(e => e.id === '5b_leroy_bob'));
+await studio.collection('appreciations').doc('premium_bob').delete();
+console.log('Élèves et classes non suivis');
+t('exclusions vides au départ', JSON.stringify((await jean('/api/correspondances')).data.exclus) === '{"eleves":[],"classes":[]}');
+await jean('/api/exclus', { eleves: ['5b_leroy_bob'], classes: [] });
+t('Bob retiré : plus dans le tableau', !(await jean('/api/tableau')).data.eleves.some(e => e.id === '5b_leroy_bob'));
+t('Bob retiré : plus dans le bulletin', !(await jean('/api/bulletin?trimestre=T1&classe=5B')).data.eleves.some(e => e.id === '5b_leroy_bob'));
+t('Bob retiré : toujours proposé dans les noms (pour le remettre)', (await jean('/api/correspondances')).data.references.some(r => r.id === '5b_leroy_bob'));
+await jean('/api/exclus', { eleves: [], classes: ['5e B'] });
+t('classe 5e B retirée : plus proposée au bulletin', (await jean('/api/bulletin')).data.classes.length === 0 && (await jean('/api/correspondances')).data.exclus.classes[0] === '5b');
+await jean('/api/exclus', { eleves: [], classes: [] });
+t('tout remis : Bob revient', (await jean('/api/tableau')).data.eleves.some(e => e.id === '5b_leroy_bob'));
 t('2e trimestre : pas encore de note', (await jean('/api/bulletin/colonnes', { trimestre: 'T2', classe: '5B', colonnes: bu.colonnesDispo })).status === 200 && (await jean('/api/bulletin?trimestre=T2&classe=5B')).data.eleves.every(e => e.calculee === null));
 t('note définitive saisie avec une virgule', (await jean('/api/bulletin/eleve', { trimestre: 'T1', classe: '5B', refId: '5b_durand_alice', finale: '15,5', externes: { oral: '12' }, appreciation: 'Très bon trimestre.' })).status === 200);
 t('note hors barème : refusée', (await jean('/api/bulletin/eleve', { trimestre: 'T1', classe: '5B', refId: '5b_durand_alice', finale: 25 })).status === 400);

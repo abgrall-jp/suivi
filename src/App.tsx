@@ -4,6 +4,7 @@ import { auth, connexionEmail, connexionGoogle, deconnexion, inscriptionEmail, m
 import { api, type Correspondances, type Moi, type Tableau } from "./api.ts";
 import { ReglagesAdmin, VueBulletin, VueProfPrincipal } from "./Bulletin.tsx";
 import { ParentsOubli, VueParents } from "./Parents.tsx";
+import { EnteteColonne, sansAccent } from "./outils.tsx";
 
 type Onglet = "tableau" | "bulletin" | "pp" | "parents" | "applications" | "correspondances" | "eleves";
 
@@ -246,6 +247,8 @@ function Liaison({ moi, appId, onChange }: { moi: Moi; appId: string; onChange: 
 }
 
 // --- Tableau en direct --------------------------------------------------------------------------
+type Tri = { cle: string; sens: 1 | -1 } | null;
+
 const couleur = (p: number) => (p >= 75 ? "tres-bien" : p >= 50 ? "bien" : p >= 25 ? "moyen" : "faible");
 const dateCourte = (t: number | null) => (t ? new Date(t).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "");
 
@@ -253,6 +256,8 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
   const [t, setT] = useState<Tableau | null>(null);
   const [msg, setMsg] = useState("");
   const [classe, setClasse] = useState("");
+  const [cherche, setCherche] = useState("");
+  const [tri, setTri] = useState<Tri>(null);
 
   const charger = useCallback(async () => {
     try { const d = await api<Tableau>("/api/tableau"); setT(d); onAVerifier(d.aVerifier); setMsg(""); } catch (e: any) { setMsg(e.message); }
@@ -266,9 +271,34 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
   }, [charger]);
 
   const classes = useMemo(() => Array.from(new Set((t?.eleves || []).map(e => e.classe))).sort((a, b) => a.localeCompare(b, "fr")), [t]);
-  const eleves = (t?.eleves || []).filter(e => !classe || e.classe === classe);
-  const apps = (t?.applications || []).filter(a => a.exercices.length);
+  const filtres = (t?.eleves || []).filter(e => !classe || e.classe === classe);
+  // Colonnes : seulement celles où un élève affiché a un résultat (une classe de 4e ne voit pas les séquences de 2de),
+  // et celles dont le titre contient le texte cherché.
+  const mots = sansAccent(cherche).split(/\s+/).filter(Boolean);
+  const apps = (t?.applications || []).map(a => ({
+    ...a,
+    exercices: a.exercices.filter(x => filtres.some(e => e.resultats[`${a.id}:${x.id}`])
+      && mots.every(m => sansAccent(`${a.nom} ${x.titre}`).includes(m))),
+  })).filter(a => a.exercices.length);
   const reliees = Object.keys(moi.apps).length;
+  const eleves = [...filtres];
+  if (tri?.cle === "__nom") eleves.sort((a, b) => tri.sens * `${a.nom} ${a.prenom}`.localeCompare(`${b.nom} ${b.prenom}`, "fr"));
+  else if (tri) eleves.sort((a, b) => {
+    const pa = a.resultats[tri.cle]?.percent, pb = b.resultats[tri.cle]?.percent;
+    if (pa === undefined || pb === undefined) return pa === undefined ? (pb === undefined ? 0 : 1) : -1; // sans résultat : en bas
+    return tri.sens * (pa - pb);
+  });
+  // 1er clic : meilleurs en haut ; 2e : plus faibles en haut ; 3e : ordre de la classe.
+  const trier = (cle: string) => setTri(p => (p?.cle !== cle ? { cle, sens: cle === "__nom" ? 1 : -1 } : p.sens === (cle === "__nom" ? 1 : -1) ? { cle, sens: (-p.sens) as 1 | -1 } : null));
+  const fleche = (cle: string) => (tri?.cle === cle ? (tri.sens === -1 ? " ▼" : " ▲") : "");
+  const retirer = async (id: string, nom: string) => {
+    if (!confirm(`Ne plus suivre ${nom} ? Il disparaît du tableau et du bulletin. Vous pourrez le remettre dans « Noms des élèves ».`)) return;
+    try {
+      const c = await api<Correspondances>("/api/correspondances");
+      await api("/api/exclus", { ...c.exclus, eleves: [...c.exclus.eleves, id] });
+      charger();
+    } catch (e: any) { setMsg(e.message); }
+  };
 
   if (!t && !msg) return <p>Chargement des résultats…</p>;
   if (!reliees) return (
@@ -285,6 +315,7 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
           <option value="">Toutes les classes</option>
           {classes.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
+        <input type="search" placeholder="Chercher une colonne (ex. : 4e Séq. 2)" value={cherche} onChange={e => setCherche(e.target.value)} />
         <button onClick={charger}>Actualiser</button>
         {t && <span className="petit">Mis à jour à {new Date(t.lu).toLocaleTimeString("fr-FR")}</span>}
       </div>
@@ -295,20 +326,25 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
           <button className="lien" onClick={() => allerA("correspondances")}>Vérifier</button></p>
       )}
       {t?.provisoire && <p className="petit">La liste de l'établissement n'est pas encore importée : les élèves sont repris des applications.</p>}
-      {!apps.length ? <p>Pas encore de résultat dans les applications reliées.</p> : (
+      {!!apps.length && <p className="petit">Cliquez sur le titre d'une colonne pour classer les élèves selon cette note (cliquez encore pour inverser).</p>}
+      {!apps.length ? <p>{cherche ? "Aucune colonne ne correspond à cette recherche." : "Pas encore de résultat dans les applications reliées."}</p> : (
         <div className="defile">
           <table className="tableau">
             <thead>
               <tr>
-                <th rowSpan={2} className="fixe">Élève</th>
+                <th rowSpan={2} className="fixe triable" onClick={() => trier("__nom")} title="Classer par nom">Élève{fleche("__nom")}</th>
                 {apps.map(a => <th key={a.id} colSpan={a.exercices.length} className="groupe">{a.nom}</th>)}
               </tr>
-              <tr>{apps.flatMap(a => a.exercices.map(x => <th key={`${a.id}:${x.id}`} className="exo" title={x.titre}>{x.titre}</th>))}</tr>
+              <tr>{apps.flatMap(a => a.exercices.map(x => {
+                const cle = `${a.id}:${x.id}`;
+                return <th key={cle} className={`exo triable ${tri?.cle === cle ? "trie" : ""}`} title={`${x.titre}\nCliquer pour classer`} onClick={() => trier(cle)}><EnteteColonne titre={x.titre} />{fleche(cle)}</th>;
+              }))}</tr>
             </thead>
             <tbody>
               {eleves.map(e => (
                 <tr key={e.id}>
-                  <td className="fixe"><span className="nom">{e.nom} {e.prenom}</span><span className="classe">{e.classe}</span></td>
+                  <td className="fixe"><span className="nom">{e.nom} {e.prenom}</span><span className="classe">{e.classe}
+                    <button className="lien retirer" title="Ne plus suivre cet élève" onClick={() => retirer(e.id, `${e.nom} ${e.prenom}`.trim())}>retirer</button></span></td>
                   {apps.flatMap(a => a.exercices.map(x => {
                     const r = e.resultats[`${a.id}:${x.id}`];
                     return <td key={`${a.id}:${x.id}`} className={r ? couleur(r.percent) : "vide"} title={r ? `${r.score} · ${dateCourte(r.at)}` : ""}>{r ? <>{r.score && <span className="note">{r.score.replace(/\s*\/\s*/, "/")}</span>}{Math.round(r.percent)} %</> : ""}</td>;
@@ -325,6 +361,36 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
 
 // --- Correspondances des noms --------------------------------------------------------------------
 const libelleStatut: Record<string, string> = { confirme: "Confirmé", auto: "Reconnu", a_verifier: "À vérifier", aucun: "Introuvable", ignore: "Ignoré" };
+type Ref = Correspondances["references"][number];
+const nomComplet = (r: Ref) => `${r.nom} ${r.prenom}`.trim();
+
+/** Élèves dont le nom ou le prénom commence par les lettres tapées (« dur », « alice d », « d a »). */
+export function chercherEleves(refs: Ref[], texte: string, max = 8): Ref[] {
+  const mots = sansAccent(texte).split(/[\s,.'-]+/).filter(Boolean);
+  if (!mots.length) return [];
+  return refs.filter(r => {
+    const parts = sansAccent(`${r.nom} ${r.prenom} ${r.classe}`).split(/[\s,.'-]+/).filter(Boolean);
+    return mots.every(m => parts.some(p => p.startsWith(m)));
+  }).sort((x, y) => x.nom.localeCompare(y.nom, "fr") || x.prenom.localeCompare(y.prenom, "fr")).slice(0, max);
+}
+
+/** Champ où l'on tape les premières lettres de l'élève, avec la liste des élèves qui correspondent. */
+function ChoixEleve({ refs, placeholder, onChoix }: { refs: Ref[]; placeholder: string; onChoix: (r: Ref) => void }) {
+  const [texte, setTexte] = useState("");
+  const trouves = chercherEleves(refs, texte);
+  return (
+    <span className="choix-eleve">
+      <input type="search" placeholder={placeholder} value={texte} onChange={e => setTexte(e.target.value)}
+        onKeyDown={e => { if (e.key === "Enter" && trouves.length === 1) { onChoix(trouves[0]); setTexte(""); } }} />
+      {!!texte.trim() && (
+        <span className="liste">
+          {trouves.length ? trouves.map(r => <button key={r.id} onClick={() => { onChoix(r); setTexte(""); }}>{nomComplet(r)} ({r.classe})</button>)
+            : <span className="petit" style={{ padding: 8, display: "block" }}>Aucun élève ne commence par « {texte} ».</span>}
+        </span>
+      )}
+    </span>
+  );
+}
 
 function VueCorrespondances({ onChange }: { onChange: (n: number) => void }) {
   const [c, setC] = useState<Correspondances | null>(null);
@@ -342,13 +408,20 @@ function VueCorrespondances({ onChange }: { onChange: (n: number) => void }) {
   const choisir = async (app: string, studentId: string, refId: string | null) => {
     try { await api("/api/correspondances", { app, studentId, refId }); charger(); } catch (e: any) { setMsg(e.message); }
   };
+  const exclure = async (x: { eleves: string[]; classes: string[] }) => {
+    try { await api("/api/exclus", x); charger(); } catch (e: any) { setMsg(e.message); }
+  };
 
   if (!c) return msg ? <p className="erreur">{msg}</p> : <p>Chargement…</p>;
   const refDe = new Map(c.references.map(r => [r.id, r]));
-  const nomRef = (id: string) => { const r = refDe.get(id); return r ? `${r.nom} ${r.prenom} (${r.classe})` : id; };
+  const nomRef = (id: string) => { const r = refDe.get(id); return r ? `${nomComplet(r)} (${r.classe})` : id; };
   const ordre = ["a_verifier", "aucun", "ignore", "confirme", "auto"];
-  const lignes = c.eleves.filter(e => tous || e.statut === "a_verifier" || e.statut === "aucun")
+  const cleCl = (s: string) => sansAccent(s).replace(/[^a-z0-9]/g, "").replace(/^(\d+)(ieme|eme|em|e)?/, "$1");
+  const classeExclue = (classe: string) => c.exclus.classes.includes(cleCl(classe));
+  const lignes = c.eleves.filter(e => (tous || e.statut === "a_verifier" || e.statut === "aucun") && !classeExclue(e.classe))
     .sort((a, b) => ordre.indexOf(a.statut) - ordre.indexOf(b.statut) || a.classe.localeCompare(b.classe, "fr") || a.nom.localeCompare(b.nom, "fr"));
+  const classes = Array.from(new Map(c.references.map(r => [cleCl(r.classe), r.classe])).entries()).sort((a, b) => a[1].localeCompare(b[1], "fr", { numeric: true }));
+  const exclus = c.exclus.eleves.map(id => refDe.get(id) || { id, nom: id, prenom: "", classe: "" });
 
   return (
     <section>
@@ -356,31 +429,53 @@ function VueCorrespondances({ onChange }: { onChange: (n: number) => void }) {
         <h2>Noms des élèves</h2>
         <label className="petit"><input type="checkbox" checked={tous} onChange={e => setTous(e.target.checked)} /> Montrer aussi les élèves reconnus</label>
       </div>
+
+      <div className="carte">
+        <h3>Élèves et classes suivis</h3>
+        <p className="petit">Décochez une classe qui n'a pas besoin de suivi, ou retirez un élève (compte de test, élève parti). Ils disparaissent du tableau et du bulletin ; vous pouvez les remettre à tout moment.</p>
+        <div className="etiquettes">
+          {classes.map(([cle, nom]) => (
+            <label key={cle} className={`etiquette ${c.exclus.classes.includes(cle) ? "exclue" : ""}`}>
+              <input type="checkbox" checked={!c.exclus.classes.includes(cle)}
+                onChange={ev => exclure({ ...c.exclus, classes: ev.target.checked ? c.exclus.classes.filter(x => x !== cle) : [...c.exclus.classes, cle] })} /> {nom}
+            </label>
+          ))}
+        </div>
+        <ChoixEleve refs={c.references.filter(r => !c.exclus.eleves.includes(r.id))} placeholder="Retirer un élève : tapez les premières lettres"
+          onChoix={r => exclure({ ...c.exclus, eleves: [...c.exclus.eleves, r.id] })} />
+        {!!exclus.length && (
+          <div className="etiquettes">
+            <span className="petit">Élèves retirés :</span>
+            {exclus.map(r => (
+              <span key={r.id} className="etiquette">{nomComplet(r)}{r.classe ? ` (${r.classe})` : ""}{" "}
+                <button className="lien" onClick={() => exclure({ ...c.exclus, eleves: c.exclus.eleves.filter(x => x !== r.id) })}>remettre</button></span>
+            ))}
+          </div>
+        )}
+      </div>
+
       <p>Un même élève peut être écrit différemment d'une application à l'autre. Suivi relie seul les noms identiques ; pour les autres, choisissez l'élève une fois pour toutes.</p>
       {msg && <p className="erreur">{msg}</p>}
       {!lignes.length ? <p className="info">Tous les noms sont reconnus.</p> : (
         <table className="corr">
           <thead><tr><th>Application</th><th>Nom dans l'application</th><th>Classe</th><th>État</th><th>Élève de la liste</th></tr></thead>
           <tbody>
-            {lignes.map(e => {
-              const autres = c.references.filter(r => !e.candidats.includes(r.id));
-              return (
-                <tr key={`${e.app}:${e.studentId}`}>
-                  <td>{e.appNom}</td>
-                  <td>{e.nom}</td>
-                  <td>{e.classe}</td>
-                  <td><span className={`etat ${e.statut}`}>{libelleStatut[e.statut]}</span></td>
-                  <td>
-                    <select value={e.refId || ""} onChange={ev => choisir(e.app, e.studentId, ev.target.value === "__ignorer" ? null : ev.target.value)}>
-                      <option value="" disabled>Choisir l'élève…</option>
-                      {e.candidats.length > 0 && <optgroup label="Proposés">{e.candidats.map(id => <option key={id} value={id}>{nomRef(id)}</option>)}</optgroup>}
-                      <optgroup label="Tous les élèves">{autres.map(r => <option key={r.id} value={r.id}>{nomRef(r.id)}</option>)}</optgroup>
-                      <option value="__ignorer">Ne pas suivre cet élève (compte de test…)</option>
-                    </select>
-                  </td>
-                </tr>
-              );
-            })}
+            {lignes.map(e => (
+              <tr key={`${e.app}:${e.studentId}`}>
+                <td>{e.appNom}</td>
+                <td>{e.nom}</td>
+                <td>{e.classe}</td>
+                <td><span className={`etat ${e.statut}`}>{libelleStatut[e.statut]}</span></td>
+                <td>
+                  <div className="choix-eleve">
+                    {e.refId && <strong>{nomRef(e.refId)}</strong>}
+                    {e.candidats.map(id => <button key={id} onClick={() => choisir(e.app, e.studentId, id)}>{nomRef(id)}</button>)}
+                    <ChoixEleve refs={c.references} placeholder={e.refId ? "Changer : premières lettres…" : "Tapez les premières lettres…"} onChoix={r => choisir(e.app, e.studentId, r.id)} />
+                    {e.statut !== "ignore" && <button className="lien" title="Compte de test, élève parti…" onClick={() => choisir(e.app, e.studentId, null)}>ne pas suivre</button>}
+                  </div>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       )}

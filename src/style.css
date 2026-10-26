@@ -87,3 +87,19 @@ table { border-collapse: collapse; }
 
 /* Note telle qu'affichée dans l'application (8/10), à côté du pourcentage. */
 td .note { font-weight: 600; margin-right: 0.4em; }
+/* En-têtes de colonnes sur plusieurs lignes, cliquables pour classer */
+.tableau th.exo { white-space: normal; min-width: 96px; max-width: 150px; vertical-align: bottom; line-height: 1.25; text-overflow: clip; }
+.tableau th .ligne-col { display: block; font-size: 11px; color: var(--doux); }
+.tableau th .titre-col { display: block; color: var(--texte, inherit); font-weight: 600; font-size: 12px; }
+.tableau th.triable { cursor: pointer; user-select: none; } .tableau th.triable:hover, .tableau th.trie { background: var(--fond); }
+.tableau .retirer { font-size: 11px; margin-left: 8px; opacity: 0; } .tableau tr:hover .retirer { opacity: 1; }
+.tableau th .coef { display: block; font-size: 11px; color: var(--accent); font-weight: 500; }
+.reglage .case input.coef { width: 52px; padding: 2px 4px; margin-left: 6px; text-align: center; }
+.reglage .case { display: inline-flex; align-items: center; gap: 4px; margin: 3px 14px 3px 0; }
+.choix-eleve { position: relative; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.choix-eleve .liste { position: absolute; top: 100%; left: 0; z-index: 10; background: var(--carte); border: 1px solid var(--bord); border-radius: 8px; min-width: 260px; max-height: 260px; overflow: auto; }
+.choix-eleve .liste button { display: block; width: 100%; text-align: left; border: 0; border-radius: 0; background: none; padding: 6px 10px; }
+.choix-eleve .liste button:hover { background: var(--fond); }
+.etiquettes { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.etiquette.exclue { text-decoration: line-through; opacity: .7; }
+.choix-eleve input, .barre input[type=search] { width: 320px; max-width: 100%; }

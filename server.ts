@@ -11,7 +11,7 @@ import { APPLICATIONS, type Application } from "./lib/applications.ts";
 import { empreinte, genererMotDePasse } from "./lib/parents.ts";
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
 import { plansDe, remarquesParEleve, type PlanPublie, type RemarqueEleve } from "./lib/planclasse.ts";
-import { dateValide, estTrimestre, lireNote, moyenne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
+import { dateValide, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
 
 // ---------------------------------------------------------------------------
 // Serveur de Suivi, le suivi global des applications Je peux apprendre (hébergement o2switch).
@@ -389,8 +389,13 @@ type Resultat = { percent: number; score: string; at: number | null };
 async function calculerTableau(e: Enseignant) {
   const lus = await lireApplications(e);
   const ok = lus.filter((l): l is { app: Application; d: Donnees; erreur: null } => !!l.d);
-  const { refs, provisoire, resultat } = await rapprocher(ok);
-  const refDe = new Map(resultat.filter(r => r.refId).map(r => [`${r.app}:${r.studentId}`, r.refId as string]));
+  const rap = await rapprocher(ok);
+  const { provisoire, resultat } = rap;
+  // Élèves et classes que l'enseignant ne suit pas (comptes de test, anciens élèves…) : absents du tableau et du bulletin.
+  const exclu = estExclu(await fiche(e));
+  const refs = rap.refs.filter(r => !exclu(r));
+  const gardes = new Set(refs.map(r => r.id));
+  const refDe = new Map(resultat.filter(r => r.refId && gardes.has(r.refId)).map(r => [`${r.app}:${r.studentId}`, r.refId as string]));
   // Tous les essais, pour le bulletin (filtrés par trimestre) ; le plus récent, pour le tableau.
   const essais = new Map<string, Record<string, Resultat[]>>();
   for (const { app: a, d } of ok) {
@@ -403,7 +408,7 @@ async function calculerTableau(e: Enseignant) {
     }
   }
   const plusRecent = (liste: Resultat[]) => liste.reduce((m, x) => ((x.at || 0) >= (m.at || 0) ? x : m));
-  const presents = new Set(resultat.map(r => r.refId).filter(Boolean) as string[]);
+  const presents = new Set(resultat.map(r => r.refId).filter((id): id is string => !!id && gardes.has(id)));
   return {
     provisoire, refs, presents, essais, plusRecent,
     applications: lus.map(l => ({
@@ -412,6 +417,17 @@ async function calculerTableau(e: Enseignant) {
     })),
     aVerifier: resultat.filter(r => r.statut === "a_verifier" || r.statut === "aucun").length,
   };
+}
+
+/** Exclusions de l'enseignant : identifiants d'élèves et classes (clé « 5b »). */
+function lireExclus(f: any): { eleves: string[]; classes: string[] } {
+  const x = f?.exclus || {};
+  return { eleves: Array.isArray(x.eleves) ? x.eleves.map(String) : [], classes: Array.isArray(x.classes) ? x.classes.map(String) : [] };
+}
+function estExclu(f: any) {
+  const x = lireExclus(f);
+  const eleves = new Set(x.eleves), classes = new Set(x.classes);
+  return (r: EleveRef) => eleves.has(r.id) || classes.has(cleClasse(r.classe));
 }
 
 const parNom = (a: EleveRef, b: EleveRef) => a.classe.localeCompare(b.classe, "fr") || a.nom.localeCompare(b.nom, "fr") || a.prenom.localeCompare(b.prenom, "fr");
@@ -464,15 +480,19 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
   const t = await calculerTableau(e);
   const classes = Array.from(new Map(t.refs.filter(r => t.presents.has(r.id)).map(r => [cleClasse(r.classe), r.classe])).entries())
     .map(([cle, nom]) => ({ cle, nom })).sort((a, b) => a.nom.localeCompare(b.nom, "fr"));
-  const colonnesDispo = t.applications.flatMap(a => a.exercices.map(x => ({ cle: `${a.id}:${x.id}`, app: a.nom, titre: x.titre })));
-  if (!req.query.trimestre || !req.query.classe) return res.json({ periodes: per, classes, colonnesDispo });
+  const toutes = t.applications.flatMap(a => a.exercices.map(x => ({ cle: `${a.id}:${x.id}`, app: a.nom, titre: x.titre })));
+  if (!req.query.trimestre || !req.query.classe) return res.json({ periodes: per, classes, colonnesDispo: toutes });
   const { trimestre, classe } = lireTrimestreClasse(req.query);
   const ref = db.doc(`bulletins/${idBulletin(e.uid, trimestre, classe)}`);
   const b = (await ref.get()).data() || {};
-  const colonnes: { cle: string; app: string; titre: string }[] = Array.isArray(b.colonnes) ? b.colonnes : [];
+  const refsClasse = elevesDeClasse(t, classe);
+  // Seuls les exercices faits par des élèves de cette classe sont proposés (pas ceux des autres niveaux).
+  const colonnesDispo = toutes.filter(c => refsClasse.some(r => t.essais.get(r.id)?.[c.cle]?.length));
+  const titreDe = new Map(toutes.map(c => [c.cle, c.titre]));
+  const colonnes: { cle: string; app: string; titre: string; coef: number }[] = (Array.isArray(b.colonnes) ? b.colonnes : [])
+    .map((c: any) => ({ cle: String(c.cle), app: String(c.app || ""), titre: titreDe.get(c.cle) || String(c.titre || ""), coef: lireCoef(c.coef) }));
   const externes: { id: string; titre: string }[] = Array.isArray(b.externes) ? b.externes : [];
   const notes: Record<string, any> = b.eleves || {};
-  const refsClasse = elevesDeClasse(t, classe);
   const f = await fiche(e);
   let studio = new Map<string, TextesStudio>();
   if (f.apps?.appreciations) {
@@ -487,9 +507,11 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
   }
   const eleves = refsClasse.map(r => {
     const n = notes[r.id] || {};
-    const calculee = colonnes.length ? noteSur20(t.essais.get(r.id) || {}, colonnes.map(c => c.cle), per[trimestre]) : null;
+    const essais = t.essais.get(r.id) || {};
+    const calculee = colonnes.length ? noteSur20(essais, colonnes, per[trimestre]) : null;
     return {
       id: r.id, nom: r.nom, prenom: r.prenom, calculee,
+      notes: Object.fromEntries(colonnes.map(c => [c.cle, noteColonne(essais[c.cle], per[trimestre])])),
       finale: typeof n.finale === "number" ? n.finale : null, figeeLe: n.figeeLe || null,
       externes: n.externes || {}, appreciation: n.appreciation || "",
       studio: { eleve: studio.get(r.id)?.eleve?.texte || "", prof: studio.get(r.id)?.prof?.texte || "" },
@@ -506,7 +528,7 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
   }
   res.json({
     periodes: per, classes, colonnesDispo, trimestre, classe,
-    colonnes, externes, eleves,
+    colonnes, externes, eleves, studioRelie: !!f.apps?.appreciations,
   });
 }));
 
@@ -514,7 +536,7 @@ app.post("/api/bulletin/colonnes", exigerEnseignant(), route(async (req, res) =>
   const e = ensDe(req);
   const { trimestre, classe } = lireTrimestreClasse(req.body);
   const colonnes = (Array.isArray(req.body?.colonnes) ? req.body.colonnes : []).slice(0, 100)
-    .map((c: any) => ({ cle: texteCourt(c?.cle, 300), app: texteCourt(c?.app, 80), titre: texteCourt(c?.titre, 200) })).filter((c: any) => c.cle);
+    .map((c: any) => ({ cle: texteCourt(c?.cle, 300), app: texteCourt(c?.app, 80), titre: texteCourt(c?.titre, 200), coef: lireCoef(c?.coef) })).filter((c: any) => c.cle);
   const externes = (Array.isArray(req.body?.externes) ? req.body.externes : []).slice(0, 20)
     .map((c: any) => ({ id: texteCourt(c?.id, 40).replace(/[^a-z0-9_-]/gi, ""), titre: texteCourt(c?.titre, 80).trim() })).filter((c: any) => c.id && c.titre);
   const t = await calculerTableau(e);
@@ -571,7 +593,7 @@ app.post("/api/bulletin/figer", exigerEnseignant(), route(async (req, res) => {
   const le = new Date().toISOString();
   for (const r of elevesDeClasse(t, classe)) {
     if (typeof b.eleves?.[r.id]?.finale === "number") continue;
-    const n = noteSur20(t.essais.get(r.id) || {}, b.colonnes.map((c: any) => c.cle), per[trimestre]);
+    const n = noteSur20(t.essais.get(r.id) || {}, b.colonnes, per[trimestre]);
     if (n !== null) maj[r.id] = { finale: n, figeeLe: le };
   }
   await ref.set({ eleves: maj, majLe: le }, { merge: true });
@@ -624,6 +646,7 @@ app.get("/api/correspondances", exigerEnseignant(), route(async (req, res) => {
   const { refs, provisoire, resultat } = await rapprocher(ok);
   res.json({
     provisoire,
+    exclus: lireExclus(await fiche(ensDe(req))),
     references: refs.map(r => ({ id: r.id, classe: r.classe, nom: r.nom, prenom: r.prenom })),
     eleves: resultat.map(r => ({ ...r, appNom: appParId(r.app)?.nom || r.app })),
   });
@@ -645,6 +668,17 @@ app.post("/api/correspondances", exigerEnseignant(), route(async (req, res) => {
   }
   await db.doc(`correspondances/${cleCorr(a.id, studentId)}`).set({ refId, par: e.email, le: new Date().toISOString() });
   res.json({ ok: true });
+}));
+
+// Élèves et classes que l'enseignant ne suit pas : la liste complète remplace la précédente.
+app.post("/api/exclus", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const liste = (v: unknown, max: number, f: (x: string) => string) =>
+    Array.from(new Set((Array.isArray(v) ? v : []).map(x => f(String(x ?? "")).slice(0, 200)).filter(Boolean))).slice(0, max);
+  const exclus = { eleves: liste(req.body?.eleves, 3000, x => x), classes: liste(req.body?.classes, 200, cleClasse) };
+  await fiche(e);
+  await db.doc(`enseignants/${e.uid}`).set({ exclus }, { merge: true });
+  res.json({ ok: true, exclus });
 }));
 
 // Liste des élèves de l'établissement (administrateur) : Classe ; Nom ; Prénom, collée depuis un tableur.

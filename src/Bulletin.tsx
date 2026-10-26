@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.ts";
+import { EnteteColonne } from "./outils.tsx";
 
 type Trimestre = "T1" | "T2" | "T3";
 type Periodes = Record<Trimestre, { debut: string; fin: string }>;
-type Colonne = { cle: string; app: string; titre: string };
+type Colonne = { cle: string; app: string; titre: string; coef?: number };
 type Externe = { id: string; titre: string };
 type LigneBulletin = {
-  id: string; nom: string; prenom: string; calculee: number | null; finale: number | null; figeeLe: string | null;
+  id: string; nom: string; prenom: string; calculee: number | null; notes?: Record<string, number | null>; finale: number | null; figeeLe: string | null;
   externes: Record<string, number | null>; appreciation: string; studio?: { eleve: string; prof: string };
   remarques?: { date: string; seance: string; texte: string }[];
 };
 type Bulletin = {
   periodes: Periodes; classes: { cle: string; nom: string }[]; colonnesDispo: Colonne[];
-  colonnes?: Colonne[]; externes?: Externe[]; eleves?: LigneBulletin[];
+  colonnes?: Colonne[]; externes?: Externe[]; eleves?: LigneBulletin[]; studioRelie?: boolean;
 };
 
 const TRIMESTRES: Trimestre[] = ["T1", "T2", "T3"];
@@ -70,11 +71,12 @@ export function VueBulletin() {
 
   if (!b || !trimestre) return msg ? <p className="erreur">{msg}</p> : <p>Chargement…</p>;
   const externes = b.externes || [];
+  const colonnes = b.colonnes || [];
   const pret = !!(classe && b.eleves && b.colonnes?.length && !reglage);
 
   const exporter = () => {
-    const entete = ["Nom", "Prénom", "Note calculée", "Note définitive", ...externes.map(x => x.titre), "Appréciation"];
-    const lignes = (b.eleves || []).map(e => [e.nom, e.prenom, note(e.calculee), note(e.finale), ...externes.map(x => note(e.externes[x.id])), e.appreciation]);
+    const entete = ["Nom", "Prénom", ...colonnes.map(c => `${c.titre} (coef. ${note(c.coef ?? 1)})`), "Moyenne calculée", "Note définitive", ...externes.map(x => x.titre), "Appréciation"];
+    const lignes = (b.eleves || []).map(e => [e.nom, e.prenom, ...colonnes.map(c => note(e.notes?.[c.cle])), note(e.calculee), note(e.finale), ...externes.map(x => note(e.externes[x.id])), e.appreciation]);
     const csv = [entete, ...lignes].map(l => l.map(c => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\r\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
@@ -100,11 +102,14 @@ export function VueBulletin() {
       {classe && reglage && <ReglageColonnes b={b} trimestre={trimestre} classe={classe} onFini={() => { setReglage(false); charger(); }} />}
       {pret && (
         <>
-          <p className="petit">La note calculée suit les résultats du trimestre. Écrivez une note définitive, ou cliquez sur « Figer les notes » : elle ne sera plus mise à jour par le logiciel, mais vous pourrez toujours la changer.</p>
+          {!b.studioRelie && <p className="petit">Pour voir ici les appréciations écrites dans le Studio d'Appréciations, reliez-le dans « Mes applications ».</p>}
+          <p className="petit">Chaque colonne montre la note sur 20 du dernier essai du trimestre ; la moyenne calculée en tient compte avec les coefficients. Écrivez une note définitive, ou cliquez sur « Figer les notes » : elle ne sera plus mise à jour par le logiciel, mais vous pourrez toujours la changer.</p>
           <div className="defile">
             <table className="tableau bulletin">
               <thead><tr>
-                <th className="fixe">Élève</th><th>Calculée</th><th>Définitive</th>
+                <th className="fixe">Élève</th>
+                {colonnes.map(c => <th key={c.cle} className="exo" title={`${c.app} : ${c.titre}`}><EnteteColonne titre={c.titre} /><span className="coef">coef. {note(c.coef ?? 1)}</span></th>)}
+                <th>Moyenne calculée</th><th>Définitive</th>
                 {externes.map(x => <th key={x.id}>{x.titre}</th>)}
                 <th>Appréciation</th>
               </tr></thead>
@@ -112,7 +117,8 @@ export function VueBulletin() {
                 {b.eleves!.map(e => (
                   <tr key={e.id}>
                     <td className="fixe"><span className="nom">{e.nom} {e.prenom}</span></td>
-                    <td>{note(e.calculee) || "–"}</td>
+                    {colonnes.map(c => <td key={c.cle}>{note(e.notes?.[c.cle]) || "–"}</td>)}
+                    <td><strong>{note(e.calculee) || "–"}</strong></td>
                     <td className={e.finale !== null ? "figee" : ""}>
                       <ChampNote valeur={e.finale} indication={note(e.calculee)} onValider={v => enregistrer(e.id, { finale: v })} />
                       {e.finale !== null && <button className="lien" title="Revenir à la note calculée" onClick={() => enregistrer(e.id, { finale: null })}>↺</button>}
@@ -161,6 +167,7 @@ function ChampTexte({ valeur, onValider }: { valeur: string; onValider: (v: stri
 
 function ReglageColonnes({ b, trimestre, classe, onFini }: { b: Bulletin; trimestre: Trimestre; classe: string; onFini: () => void }) {
   const [coches, setCoches] = useState<string[]>((b.colonnes || []).map(c => c.cle));
+  const [coefs, setCoefs] = useState<Record<string, string>>(Object.fromEntries((b.colonnes || []).map(c => [c.cle, note(c.coef ?? 1)])));
   const [externes, setExternes] = useState<Externe[]>(b.externes || []);
   const [nouvelle, setNouvelle] = useState("");
   const [msg, setMsg] = useState("");
@@ -172,12 +179,20 @@ function ReglageColonnes({ b, trimestre, classe, onFini }: { b: Bulletin; trimes
   return (
     <div className="carte reglage">
       <h3>Notes reprises dans le bulletin</h3>
-      <p className="petit">Cochez les exercices qui comptent pour ce trimestre. La note calculée est la moyenne de ces exercices, ramenée sur 20.</p>
-      {!b.colonnesDispo.length && <p>Pas encore d'exercice avec des résultats dans vos applications.</p>}
+      <p className="petit">Cochez les exercices qui comptent pour ce trimestre et donnez-leur un coefficient. Seuls les exercices faits par les élèves de cette classe sont proposés. La moyenne calculée est la moyenne de ces notes, avec leurs coefficients, sur 20.</p>
+      {!b.colonnesDispo.length && <p>Pas encore d'exercice avec des résultats pour cette classe.</p>}
       {Array.from(parApp.entries()).map(([app, cols]) => (
         <fieldset key={app}>
           <legend>{app}</legend>
-          {cols.map(c => <label key={c.cle} className="case"><input type="checkbox" checked={coches.includes(c.cle)} onChange={() => basculer(c.cle)} /> {c.titre}</label>)}
+          {cols.map(c => (
+            <span key={c.cle} className="case">
+              <label><input type="checkbox" checked={coches.includes(c.cle)} onChange={() => basculer(c.cle)} /> {c.titre}</label>
+              {coches.includes(c.cle) && <>
+                <span className="petit">coef.</span>
+                <input className="coef" inputMode="decimal" value={coefs[c.cle] ?? "1"} onChange={e => setCoefs({ ...coefs, [c.cle]: e.target.value })} />
+              </>}
+            </span>
+          ))}
         </fieldset>
       ))}
       <fieldset>
@@ -193,7 +208,8 @@ function ReglageColonnes({ b, trimestre, classe, onFini }: { b: Bulletin; trimes
       {msg && <p className="erreur">{msg}</p>}
       <button className="principal" disabled={!coches.length} onClick={async () => {
         const toutes = Array.from(parApp.values()).flat();
-        try { await api("/api/bulletin/colonnes", { trimestre, classe, colonnes: toutes.filter(c => coches.includes(c.cle)), externes }); onFini(); } catch (e: any) { setMsg(e.message); }
+        const colonnes = toutes.filter(c => coches.includes(c.cle)).map(c => ({ ...c, coef: Number(String(coefs[c.cle] ?? "1").replace(",", ".")) || 1 }));
+        try { await api("/api/bulletin/colonnes", { trimestre, classe, colonnes, externes }); onFini(); } catch (e: any) { setMsg(e.message); }
       }}>Enregistrer</button>
       {(b.colonnes || []).length > 0 && <button className="lien" onClick={onFini}>Annuler</button>}
     </div>
