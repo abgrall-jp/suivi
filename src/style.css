@@ -84,3 +84,6 @@ table { border-collapse: collapse; }
 .studio { font-size: 12px; color: var(--doux); margin-top: 4px; }
 .studio.eleve { font-style: italic; }
 .studio ul { margin: 4px 0; padding-left: 18px; } .studio summary { cursor: pointer; }
+
+/* Note telle qu'affichée dans l'application (8/10), à côté du pourcentage. */
+td .note { font-weight: 600; margin-right: 0.4em; }

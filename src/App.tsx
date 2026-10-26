@@ -311,7 +311,7 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
                   <td className="fixe"><span className="nom">{e.nom} {e.prenom}</span><span className="classe">{e.classe}</span></td>
                   {apps.flatMap(a => a.exercices.map(x => {
                     const r = e.resultats[`${a.id}:${x.id}`];
-                    return <td key={`${a.id}:${x.id}`} className={r ? couleur(r.percent) : "vide"} title={r ? `${r.score} · ${dateCourte(r.at)}` : ""}>{r ? `${Math.round(r.percent)} %` : ""}</td>;
+                    return <td key={`${a.id}:${x.id}`} className={r ? couleur(r.percent) : "vide"} title={r ? `${r.score} · ${dateCourte(r.at)}` : ""}>{r ? <>{r.score && <span className="note">{r.score.replace(/\s*\/\s*/, "/")}</span>}{Math.round(r.percent)} %</> : ""}</td>;
                   }))}
                 </tr>
               ))}
