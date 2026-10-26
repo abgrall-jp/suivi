@@ -192,7 +192,7 @@ await jean('/api/bulletin/eleve', { trimestre: 'T1', classe: '5B', refId: '5b_le
 
 console.log('Espace des familles');
 const famille = async (chemin, jeton, body) => {
-  const r = await fetch(B + chemin, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(jeton ? { Authorization: `Famille ${jeton}` } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const r = await fetch(B + chemin, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': `10.7.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`, ...(jeton ? { Authorization: `Famille ${jeton}` } : {}) }, body: body ? JSON.stringify(body) : undefined });
   let data = {}; try { data = await r.json(); } catch {}
   return { status: r.status, data };
 };
@@ -207,21 +207,31 @@ t('bulletin publié', (await jean('/api/publier/bulletin', { trimestre: 'T1', cl
 t('date de publication visible dans le bulletin', !!(await jean('/api/bulletin?trimestre=T1&classe=5B')).data.publieLe);
 const listeCodes = (await jean('/api/famille/codes?classe=5B')).data.eleves;
 t('codes : élèves suivis de la classe, sans code', listeCodes.length === 2 && listeCodes.every(e => !e.codeLe), listeCodes);
-const cc = (await jean('/api/famille/codes', { classe: '5B' })).data;
-t('deux codes créés, avec l’adresse /famille', cc.codes.length === 2 && cc.adresse.endsWith('/famille'), cc);
-t('pas de nouveau code pour les élèves qui en ont un', (await jean('/api/famille/codes', { classe: '5B' })).data.codes.length === 0);
-const codeAlice = cc.codes.find(c => c.id === '5b_durand_alice').code;
-t('code incorrect : refusé', (await famille('/api/famille/connexion', null, { code: 'Faux-Code-00-0' })).status === 401);
-const cx = await famille('/api/famille/connexion', null, { code: codeAlice.toLowerCase().replace(/-/g, ' ') });
-t('connexion avec le code, écrit en minuscules et avec des espaces', cx.status === 200 && cx.data.enfants[0].prenom === 'Alice', cx.data);
+t('mot de passe de classe trop court : refusé', (await jean('/api/famille/codes', { classe: '5B', motDeClasse: 'abc' })).status === 400);
+const cc = (await jean('/api/famille/codes', { classe: '5B', motDeClasse: 'Classe-5B' })).data;
+t('fiches : identifiant de chaque élève et mot de passe de classe commun', cc.codes.length === 2 && cc.motDeClasse === 'Classe-5B' && cc.codes.every(c => c.code === 'Classe-5B') && cc.codes.find(c => c.id === '5b_durand_alice')?.identifiant === 'alice.durand.5b' && cc.adresse.endsWith('/famille'), cc);
+t('pas de nouvelle fiche pour les élèves qui en ont une', (await jean('/api/famille/codes', { classe: '5B' })).data.codes.length === 0);
+t('mauvais mot de passe : refusé', (await famille('/api/famille/connexion', null, { identifiant: 'alice.durand.5b', motDePasse: 'Faux' })).status === 401);
+const cx0 = await famille('/api/famille/connexion', null, { identifiant: ' Alice.Durand.5B ', motDePasse: 'Classe-5B' });
+t('1re connexion avec le mot de passe de classe : choix du mot de passe demandé', cx0.status === 200 && cx0.data.doitChanger === true && cx0.data.prenom === 'Alice', cx0.data);
+t('ce jeton ne permet pas de voir les résultats', (await famille('/api/famille', cx0.data.jeton)).status === 401);
+t('mot de passe trop court : refusé', (await famille('/api/famille/mot-de-passe', null, { jeton: cx0.data.jeton, nouveau: 'court' })).status === 400);
+const ch = await famille('/api/famille/mot-de-passe', null, { jeton: cx0.data.jeton, nouveau: 'AliceSecret1' });
+t('mot de passe choisi : Alice entre', ch.status === 200 && ch.data.enfants[0].prenom === 'Alice', ch.data);
+t('le mot de passe de classe ne sert plus pour Alice', (await famille('/api/famille/connexion', null, { identifiant: 'alice.durand.5b', motDePasse: 'Classe-5B' })).status === 401);
+t('Bob doit encore choisir le sien', (await famille('/api/famille/connexion', null, { identifiant: 'bob.leroy.5b', motDePasse: 'Classe-5B' })).data.doitChanger === true);
+const cx = await famille('/api/famille/connexion', null, { identifiant: 'alice.durand.5b', motDePasse: 'AliceSecret1' });
+t('Alice (ou ses parents) entrent avec son mot de passe', cx.status === 200 && cx.data.enfants[0].prenom === 'Alice', cx.data);
+t('l’enseignant voit que le mot de passe est choisi', (await jean('/api/famille/codes?classe=5B')).data.eleves.find(e => e.id === '5b_durand_alice').personnalise === true);
 const vue = (await famille('/api/famille', cx.data.enfants[0].jeton)).data;
 t('Alice voit son nom', vue.eleve?.prenom === 'Alice');
 t('tableau : seulement la colonne publiée et son propre résultat', vue.tableaux.length === 1 && vue.tableaux[0].colonnes.length === 1 && vue.tableaux[0].resultats['textetrous:ex1']?.percent === 90, vue.tableaux);
 t('bulletin : sa note définitive et son appréciation', vue.bulletins[0]?.moyenne === 15.5 && vue.bulletins[0].definitive && vue.bulletins[0].appreciation === 'Très bon trimestre.' && vue.bulletins[0].externesNotes.oral === 12, vue.bulletins);
 t('rien sur les camarades', !JSON.stringify(vue).includes('Leroy') && !JSON.stringify(vue).includes('LEROY'));
-const ancien = codeAlice;
-const nv = (await jean('/api/famille/codes', { classe: '5B', refIds: ['5b_durand_alice'] })).data.codes[0].code;
-t('nouveau code : l’ancien ne marche plus, le nouveau oui', (await famille('/api/famille/connexion', null, { code: ancien })).status === 401 && (await famille('/api/famille/connexion', null, { code: nv })).status === 200);
+const nv = (await jean('/api/famille/codes', { classe: '5B', refIds: ['5b_durand_alice'] })).data.codes[0];
+t('mot de passe oublié : nouveau départ personnel, même identifiant', nv.identifiant === 'alice.durand.5b' && nv.code !== 'Classe-5B');
+t('l’ancien mot de passe ne marche plus, le nouveau départ oui', (await famille('/api/famille/connexion', null, { identifiant: 'alice.durand.5b', motDePasse: 'AliceSecret1' })).status === 401
+  && (await famille('/api/famille/connexion', null, { identifiant: 'alice.durand.5b', motDePasse: nv.code })).data.doitChanger === true);
 t('jeton modifié : refusé', (await famille('/api/famille', cx.data.enfants[0].jeton + 'x')).status === 401);
 await jean('/api/publier/bulletin', { trimestre: 'T1', classe: '5B', retirer: true });
 t('publication retirée : plus visible', (await famille('/api/famille', cx.data.enfants[0].jeton)).data.bulletins.length === 0);

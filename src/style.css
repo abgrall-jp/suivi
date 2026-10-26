@@ -128,3 +128,4 @@ td .note { font-weight: 600; margin-right: 0.4em; }
   .fiches { grid-template-columns: 1fr 1fr; }
 }
 .fiche-code { overflow-wrap: anywhere; }
+.fiche-code .petit-fiche { font-size: 12px; color: var(--doux); }

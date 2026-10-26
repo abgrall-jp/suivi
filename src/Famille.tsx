@@ -28,9 +28,12 @@ const nomTrimestre = (t: string) => `${t.slice(1)}${t === "T1" ? "er" : "e"} tri
 export function EspaceFamille() {
   const [enfants, setEnfants] = useState<Enfant[]>(lire);
   const [choisi, setChoisi] = useState(0);
+  const [changer, setChanger] = useState<{ jeton: string; prenom: string; premiere: boolean } | null>(null);
   const enfant = enfants[choisi];
-  const sortir = () => { ecrire([]); setEnfants([]); setChoisi(0); };
-  if (!enfant) return <ConnexionFamille onOk={e => { ecrire(e); setEnfants(e); setChoisi(0); }} />;
+  const sortir = () => { ecrire([]); setEnfants([]); setChoisi(0); setChanger(null); };
+  const entrer = (e: Enfant[]) => { ecrire(e); setEnfants(e); setChoisi(0); setChanger(null); };
+  if (changer) return <ChoixMotDePasse {...changer} onOk={entrer} onAnnuler={() => setChanger(null)} />;
+  if (!enfant) return <ConnexionFamille onOk={entrer} onChanger={(jeton, prenom) => setChanger({ jeton, prenom, premiere: true })} />;
   return (
     <div className="appli">
       <header>
@@ -38,16 +41,19 @@ export function EspaceFamille() {
         {enfants.length > 1 && (
           <nav>{enfants.map((e, i) => <button key={e.jeton} className={i === choisi ? "actif" : ""} onClick={() => setChoisi(i)}>{e.prenom || `Enfant ${i + 1}`}</button>)}</nav>
         )}
-        <span className="moi"><button className="lien" onClick={sortir}>Se déconnecter</button></span>
+        <span className="moi">
+          <button className="lien" onClick={() => setChanger({ jeton: enfant.jeton, prenom: enfant.prenom, premiere: false })}>Changer le mot de passe</button>
+          {" · "}<button className="lien" onClick={sortir}>Se déconnecter</button>
+        </span>
       </header>
       <main><VueEnfant key={enfant.jeton} jeton={enfant.jeton} onExpire={sortir} /></main>
     </div>
   );
 }
 
-function ConnexionFamille({ onOk }: { onOk: (e: Enfant[]) => void }) {
-  const [mode, setMode] = useState<"code" | "parent">("code");
-  const [code, setCode] = useState("");
+function ConnexionFamille({ onOk, onChanger }: { onOk: (e: Enfant[]) => void; onChanger: (jeton: string, prenom: string) => void }) {
+  const [mode, setMode] = useState<"eleve" | "parent">("eleve");
+  const [identifiant, setIdentifiant] = useState("");
   const [email, setEmail] = useState("");
   const [mdp, setMdp] = useState("");
   const [msg, setMsg] = useState("");
@@ -56,13 +62,8 @@ function ConnexionFamille({ onOk }: { onOk: (e: Enfant[]) => void }) {
     ev.preventDefault();
     setMsg(""); setOccupe(true);
     try {
-      const r = await fetch("/api/famille/connexion", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(mode === "code" ? { code } : { email: email.trim(), motDePasse: mdp }),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d?.error || `Erreur ${r.status}`);
-      onOk(d.enfants);
+      const d = await poster("/api/famille/connexion", mode === "eleve" ? { identifiant, motDePasse: mdp } : { email: email.trim(), motDePasse: mdp });
+      if (d.doitChanger) onChanger(d.jeton, d.prenom); else onOk(d.enfants);
     } catch (e: any) { setMsg(e.message); } finally { setOccupe(false); }
   };
   return (
@@ -70,22 +71,54 @@ function ConnexionFamille({ onOk }: { onOk: (e: Enfant[]) => void }) {
       <h1>Suivi · Famille</h1>
       <p>Les résultats et le bulletin publiés par les enseignants.</p>
       <div className="onglets">
-        <button className={mode === "code" ? "actif" : ""} onClick={() => setMode("code")}>J'ai un code</button>
-        <button className={mode === "parent" ? "actif" : ""} onClick={() => setMode("parent")}>Parent : e-mail et mot de passe</button>
+        <button className={mode === "eleve" ? "actif" : ""} onClick={() => setMode("eleve")}>Élève ou parent : identifiant</button>
+        <button className={mode === "parent" ? "actif" : ""} onClick={() => setMode("parent")}>Parent : e-mail</button>
       </div>
       <form onSubmit={envoyer}>
-        {mode === "code" ? (
-          <input placeholder="Code (ex. : Renard-Tulipe-47-3)" value={code} onChange={e => setCode(e.target.value)} required autoComplete="off" autoCapitalize="off" />
-        ) : (
-          <>
-            <input type="email" placeholder="Adresse e-mail" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email" />
-            <input type="password" placeholder="Mot de passe parent" value={mdp} onChange={e => setMdp(e.target.value)} required autoComplete="current-password" />
-          </>
-        )}
-        <button type="submit" className="principal" disabled={occupe}>Voir</button>
+        {mode === "eleve"
+          ? <input placeholder="Identifiant (ex. : alice.durand.5b)" value={identifiant} onChange={e => setIdentifiant(e.target.value)} required autoComplete="username" autoCapitalize="off" />
+          : <input type="email" placeholder="Adresse e-mail" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email" />}
+        <input type="password" placeholder={mode === "eleve" ? "Mot de passe (la 1re fois : celui de la classe)" : "Mot de passe parent"} value={mdp} onChange={e => setMdp(e.target.value)} required autoComplete="current-password" />
+        <button type="submit" className="principal" disabled={occupe}>Entrer</button>
       </form>
       {msg && <p className="erreur">{msg}</p>}
-      {mode === "parent" && <p className="petit"><a href="/parents">Mot de passe parent perdu ?</a></p>}
+      <p className="petit">{mode === "eleve"
+        ? "Mot de passe oublié ? Demandez à votre enseignant un nouveau mot de passe de départ."
+        : <a href="/parents">Mot de passe parent perdu ?</a>}</p>
+    </div>
+  );
+}
+
+async function poster(chemin: string, body: unknown) {
+  const r = await fetch(chemin, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d?.error || `Erreur ${r.status}`);
+  return d;
+}
+
+/** Choix du mot de passe : obligatoire à la première connexion, possible ensuite. Les parents utilisent le même. */
+function ChoixMotDePasse({ jeton, prenom, premiere, onOk, onAnnuler }: { jeton: string; prenom: string; premiere: boolean; onOk: (e: Enfant[]) => void; onAnnuler: () => void }) {
+  const [a, setA] = useState("");
+  const [b, setB] = useState("");
+  const [msg, setMsg] = useState("");
+  const [occupe, setOccupe] = useState(false);
+  const envoyer = async (ev: FormEvent) => {
+    ev.preventDefault();
+    if (a !== b) { setMsg("Les deux mots de passe ne sont pas identiques."); return; }
+    setMsg(""); setOccupe(true);
+    try { onOk((await poster("/api/famille/mot-de-passe", { jeton, nouveau: a })).enfants); } catch (e: any) { setMsg(e.message); } finally { setOccupe(false); }
+  };
+  return (
+    <div className="centre carte connexion">
+      <h1>{premiere ? `Bienvenue${prenom ? ` ${prenom}` : ""} !` : "Changer le mot de passe"}</h1>
+      <p>{premiere ? "Choisissez votre mot de passe personnel : celui de la classe ne vous servira plus. " : ""}Vos parents utiliseront le même pour voir vos résultats.</p>
+      <form onSubmit={envoyer}>
+        <input type="password" placeholder="Nouveau mot de passe (8 caractères au moins)" value={a} onChange={e => setA(e.target.value)} required minLength={8} autoComplete="new-password" />
+        <input type="password" placeholder="Le même, une deuxième fois" value={b} onChange={e => setB(e.target.value)} required minLength={8} autoComplete="new-password" />
+        <button type="submit" className="principal" disabled={occupe}>Enregistrer</button>
+      </form>
+      {msg && <p className="erreur">{msg}</p>}
+      <button className="lien" onClick={onAnnuler}>{premiere ? "Retour" : "Annuler"}</button>
     </div>
   );
 }
@@ -150,13 +183,14 @@ function VueEnfant({ jeton, onExpire }: { jeton: string; onExpire: () => void })
 }
 
 // --- Codes des familles (enseignant) ---------------------------------------------------------------
-type LigneCode = { id: string; nom: string; prenom: string; classe: string; codeLe: string | null };
+type LigneCode = { id: string; nom: string; prenom: string; classe: string; codeLe: string | null; identifiant: string | null; personnalise: boolean };
 
 export function VueCodesFamille() {
   const [classes, setClasses] = useState<{ cle: string; nom: string }[]>([]);
   const [classe, setClasse] = useState("");
   const [eleves, setEleves] = useState<LigneCode[] | null>(null);
-  const [fiches, setFiches] = useState<{ codes: { id: string; nom: string; prenom: string; classe: string; code: string }[]; adresse: string } | null>(null);
+  const [fiches, setFiches] = useState<{ codes: { id: string; nom: string; prenom: string; classe: string; identifiant: string; code: string }[]; adresse: string; motDeClasse: string | null } | null>(null);
+  const [motDeClasse, setMotDeClasse] = useState("");
   const [msg, setMsg] = useState("");
   const [occupe, setOccupe] = useState(false);
 
@@ -169,7 +203,7 @@ export function VueCodesFamille() {
 
   const creer = async (refIds?: string[]) => {
     setMsg(""); setOccupe(true);
-    try { setFiches(await api("/api/famille/codes", { classe, ...(refIds ? { refIds } : {}) })); await charger(); } catch (e: any) { setMsg(e.message); } finally { setOccupe(false); }
+    try { setFiches(await api("/api/famille/codes", { classe, ...(refIds ? { refIds } : { motDeClasse: motDeClasse.trim() }) })); setMotDeClasse(""); await charger(); } catch (e: any) { setMsg(e.message); } finally { setOccupe(false); }
   };
   const sansCode = (eleves || []).filter(e => !e.codeLe);
 
@@ -183,24 +217,27 @@ export function VueCodesFamille() {
         </select>
       </div>
       <p className="petit">
-        Chaque élève reçoit un code personnel, valable pour lui et ses parents, sur <strong>{location.origin}/famille</strong>.
-        Ils y voient seulement leurs propres résultats : le tableau et le bulletin que vous avez publiés (bouton « Publier pour les familles »).
-        Les parents qui ont reçu le mot de passe parent de Suivi peuvent aussi l'utiliser.
+        Chaque élève reçoit une fiche avec son identifiant et le mot de passe de départ de la classe, pour <strong>{location.origin}/famille</strong>.
+        À la première connexion, il choisit son mot de passe ; ses parents utilisent le même. Ils y voient seulement leurs propres résultats :
+        le tableau et le bulletin que vous avez publiés (bouton « Publier pour les familles »). Mot de passe oublié : bouton « Mot de passe oublié » en face de l'élève.
       </p>
       {msg && <p className="erreur">{msg}</p>}
       {fiches && fiches.codes.length > 0 && (
         <div className="carte">
           <div className="barre">
-            <strong>{fiches.codes.length} code{fiches.codes.length > 1 ? "s" : ""} créé{fiches.codes.length > 1 ? "s" : ""}</strong>
+            <strong>{fiches.codes.length} fiche{fiches.codes.length > 1 ? "s" : ""} créée{fiches.codes.length > 1 ? "s" : ""}</strong>
             <button className="principal" onClick={() => window.print()}>Imprimer les fiches</button>
           </div>
-          <p className="petit">Notez-les ou imprimez-les maintenant : un code n'est montré qu'une fois. Un code perdu se remplace par « Nouveau code ».</p>
+          {fiches.motDeClasse && <p>Mot de passe de départ de la classe : <span className="code">{fiches.motDeClasse}</span></p>}
+          <p className="petit">Notez-le ou imprimez les fiches maintenant : il n'est montré qu'une fois. Conseil : faites la première connexion en classe, tous ensemble, pour que chacun choisisse aussitôt son mot de passe (tant qu'un élève ne l'a pas fait, un camarade qui connaît le mot de passe de classe peut ouvrir son compte).</p>
           <div className="fiches">
             {fiches.codes.map(c => (
               <div key={c.id} className="fiche-code">
                 <strong>{c.prenom} {c.nom}</strong> <span className="petit">({c.classe})</span>
                 <div>Adresse : {fiches.adresse}</div>
-                <div>Code : <span className="code">{c.code}</span></div>
+                <div>Identifiant : <span className="code">{c.identifiant}</span></div>
+                <div>Mot de passe de départ : <span className="code">{c.code}</span></div>
+                <div className="petit-fiche">À la première connexion, choisis ton mot de passe. Tes parents utiliseront le même.</div>
               </div>
             ))}
           </div>
@@ -209,18 +246,20 @@ export function VueCodesFamille() {
       {eleves && (
         <>
           <div className="barre">
+            {sansCode.length > 0 && <input placeholder="Mot de passe de classe (vide : tiré au hasard)" value={motDeClasse} onChange={e => setMotDeClasse(e.target.value)} maxLength={60} />}
             <button className="principal" disabled={occupe || !sansCode.length} onClick={() => creer()}>
-              {sansCode.length ? `Créer les codes manquants (${sansCode.length})` : "Tous les élèves ont un code"}
+              {sansCode.length ? `Créer les fiches (${sansCode.length} élève${sansCode.length > 1 ? "s" : ""})` : "Tous les élèves ont leur fiche"}
             </button>
           </div>
           <table className="corr">
-            <thead><tr><th>Élève</th><th>Code</th><th></th></tr></thead>
+            <thead><tr><th>Élève</th><th>Identifiant</th><th>Accès</th><th></th></tr></thead>
             <tbody>
               {eleves.map(e => (
                 <tr key={e.id}>
                   <td>{e.nom} {e.prenom}</td>
-                  <td>{e.codeLe ? `créé le ${new Date(e.codeLe).toLocaleDateString("fr-FR")}` : "pas encore"}</td>
-                  <td><button className="lien" disabled={occupe} onClick={() => { if (!e.codeLe || confirm(`Remplacer le code de ${e.prenom} ${e.nom} ? L'ancien ne fonctionnera plus.`)) creer([e.id]); }}>{e.codeLe ? "Nouveau code" : "Créer"}</button></td>
+                  <td>{e.identifiant || "–"}</td>
+                  <td>{!e.codeLe ? "pas encore de fiche" : e.personnalise ? "mot de passe choisi" : `fiche du ${new Date(e.codeLe).toLocaleDateString("fr-FR")}, pas encore utilisée`}</td>
+                  <td><button className="lien" disabled={occupe} onClick={() => { if (!e.codeLe || confirm(`Mot de passe oublié : nouveau mot de passe de départ, personnel, pour ${e.prenom} ${e.nom} ? Son mot de passe actuel ne fonctionnera plus : il en choisira un nouveau.`)) creer([e.id]); }}>{e.codeLe ? "Mot de passe oublié" : "Créer sa fiche"}</button></td>
                 </tr>
               ))}
             </tbody>

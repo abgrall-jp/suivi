@@ -9,7 +9,7 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { cleClasse, decider, lireListe, normaliser, type EleveRef } from "./lib/correspondance.ts";
 import { APPLICATIONS, type Application } from "./lib/applications.ts";
 import { correspond, empreinte, genererMotDePasse } from "./lib/parents.ts";
-import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, signerJeton } from "./lib/famille.ts";
+import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, normaliserCode, signerJeton } from "./lib/famille.ts";
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
 import { plansDe, remarquesParEleve, type PlanPublie, type RemarqueEleve } from "./lib/planclasse.ts";
 import { dateValide, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
@@ -865,7 +865,7 @@ app.post("/api/parents/oubli", route(async (req, res) => {
 // --- Espace des familles ------------------------------------------------------------------------
 // L'élève et ses parents voient seulement ce que les enseignants ont publié pour lui : une copie du tableau de sa classe
 // (colonnes non masquées) et le bulletin validé. publications/{uid}__tableau__{classe} et {uid}__bulletin__{trimestre}__{classe}
-// gardent une ligne par élève ; la famille ne reçoit que la sienne. Accès par code personnel (codesFamille/{empreinte})
+// gardent une ligne par élève ; la famille ne reçoit que la sienne. Accès par identifiant et mot de passe de l'élève (codesEleves)
 // ou par le mot de passe parent (collection parents).
 let secretFamille: string | null = process.env.SUIVI_SECRET || null;
 async function secret(): Promise<string> {
@@ -949,13 +949,21 @@ app.post("/api/publier/bulletin", exigerEnseignant(), route(async (req, res) => 
   res.json({ ok: true, publieLe, eleves: refs.length });
 }));
 
-// Codes personnels : l'enseignant les crée pour une classe et les imprime. Un code n'est montré qu'à sa création.
+// Accès des élèves (et de leurs parents, avec le même mot de passe) : un identifiant (« alice.durand.5b ») et un mot de passe
+// de départ commun à la classe, donnés par l'enseignant. À la première connexion, l'élève choisit son mot de passe ; le code de départ ne sert plus.
+// codesEleves/{refId} : identifiant, h (empreinte du code de départ), mdp (empreinte scrypt du mot de passe choisi).
+// identifiants/{identifiant} : refId. « Nouveau code » (mot de passe oublié) efface le mot de passe choisi.
+const identifiantDe = (r: EleveRef) => normaliserCode(`${r.prenom} ${r.nom} ${cleClasse(r.classe)}`).replace(/-/g, ".");
+
 app.get("/api/famille/codes", exigerEnseignant(), route(async (req, res) => {
   const classe = cleClasse(String(req.query.classe || ""));
   const t = await calculerTableau(ensDe(req));
   const eleves = elevesSuivis(t, classe);
   const docs = eleves.length ? await db.getAll(...eleves.map(r => db.doc(`codesEleves/${r.id}`))) : [];
-  res.json({ eleves: eleves.map((r, i) => ({ id: r.id, nom: r.nom, prenom: r.prenom, classe: r.classe, codeLe: docs[i]?.get("le") || null })) });
+  res.json({ eleves: eleves.map((r, i) => ({
+    id: r.id, nom: r.nom, prenom: r.prenom, classe: r.classe, codeLe: docs[i]?.get("le") || null,
+    identifiant: docs[i]?.get("identifiant") || null, personnalise: !!docs[i]?.get("mdp"),
+  })) });
 }));
 
 app.post("/api/famille/codes", exigerEnseignant(), route(async (req, res) => {
@@ -966,48 +974,88 @@ app.post("/api/famille/codes", exigerEnseignant(), route(async (req, res) => {
   const eleves = elevesSuivis(t, classe).filter(r => !voulus || voulus.has(r.id));
   const sec = await secret();
   const existants = eleves.length ? await db.getAll(...eleves.map(r => db.doc(`codesEleves/${r.id}`))) : [];
-  const codes: { id: string; nom: string; prenom: string; classe: string; code: string }[] = [];
+  const codes: { id: string; nom: string; prenom: string; classe: string; identifiant: string; code: string }[] = [];
   const le = new Date().toISOString();
+  // Mot de passe de départ commun à la classe (choisi par l'enseignant, ou tiré au hasard) ; un élève seul (« Nouveau code ») en reçoit un à lui.
+  const deClasse = String(req.body?.motDeClasse ?? "").trim();
+  if (deClasse && (deClasse.length < 6 || deClasse.length > 60)) throw httpError(400, "Le mot de passe de classe doit avoir de 6 à 60 caractères.");
+  const codeCommun = voulus && voulus.size === 1 && !deClasse ? null : deClasse || genererCode();
   for (const [i, r] of eleves.entries()) {
     // Sans demande précise, seuls les élèves sans code en reçoivent un (les fiches déjà distribuées restent valables).
     if (!voulus && existants[i]?.exists) continue;
-    const code = genererCode();
-    const h = empreinteCodeFamille(code, sec);
+    let identifiant = existants[i]?.get("identifiant") || "";
+    if (!identifiant) {
+      // Deux homonymes dans la même classe : « alice.durand.5b.2 ».
+      const base = identifiantDe(r) || r.id.toLowerCase();
+      for (let n = 1; ; n++) {
+        const essai = n === 1 ? base : `${base}.${n}`;
+        const d = await db.doc(`identifiants/${essai}`).get();
+        if (!d.exists || d.get("refId") === r.id) { identifiant = essai; break; }
+      }
+    }
+    const code = codeCommun || genererCode();
     const lot = db.batch();
-    if (existants[i]?.get("h")) lot.delete(db.doc(`codesFamille/${existants[i].get("h")}`));
-    lot.set(db.doc(`codesFamille/${h}`), { refId: r.id, par: e.email, le });
-    lot.set(db.doc(`codesEleves/${r.id}`), { h, par: e.email, le });
+    lot.set(db.doc(`identifiants/${identifiant}`), { refId: r.id });
+    lot.set(db.doc(`codesEleves/${r.id}`), { identifiant, nom: r.nom, prenom: r.prenom, h: empreinteCodeFamille(code, sec), mdp: FieldValue.delete(), par: e.email, le }, { merge: true });
     await lot.commit();
-    codes.push({ id: r.id, nom: r.nom, prenom: r.prenom, classe: r.classe, code });
+    codes.push({ id: r.id, nom: r.nom, prenom: r.prenom, classe: r.classe, identifiant, code });
   }
-  res.json({ codes, adresse: `${ADRESSE}/famille` });
+  res.json({ codes, adresse: `${ADRESSE}/famille`, motDeClasse: codes.length && codeCommun ? codeCommun : null });
 }));
 
 const limiteFamille = makeLimiter(10, 15 * 60 * 1000);
+const enfantPour = async (refId: string, sec: string) => {
+  const r = (await elevesReference()).find(x => x.id === refId) || (await db.doc(`codesEleves/${refId}`).get()).data();
+  return { jeton: signerJeton(refId, sec), prenom: String(r?.prenom || ""), nom: String(r?.nom || "") };
+};
+const MDP_MIN = 8;
+
 app.post("/api/famille/connexion", route(async (req, res) => {
   if (!limiteFamille(String(req.ip))) throw httpError(429, "Trop d'essais. Réessayez dans un quart d'heure.");
   const sec = await secret();
-  let refIds: string[] = [];
-  if (req.body?.code) {
-    const d = await db.doc(`codesFamille/${empreinteCodeFamille(String(req.body.code), sec)}`).get();
-    if (d.exists) refIds = [String(d.get("refId"))];
-  } else {
-    const email = String(req.body?.email || "").trim().toLowerCase();
+  if (req.body?.identifiant !== undefined) {
+    const id = normaliserCode(req.body.identifiant).replace(/-/g, ".");
     const mdp = String(req.body?.motDePasse || "").trim();
-    if (emailValide(email) && mdp) {
-      const snap = await db.collection("parents").where("email", "==", email).get();
-      refIds = Array.from(new Set(snap.docs.filter(d => correspond(mdp, String(d.get("empreinte")))).map(d => String(d.get("refId")))));
+    const refId = id ? (await db.doc(`identifiants/${id}`).get()).get("refId") : null;
+    const c = refId ? (await db.doc(`codesEleves/${refId}`).get()).data() : null;
+    if (c?.mdp && correspond(mdp, c.mdp)) return res.json({ enfants: [await enfantPour(refId, sec)] });
+    // Code de départ : accepté seulement tant que l'élève n'a pas choisi son mot de passe.
+    if (c && !c.mdp && c.h === empreinteCodeFamille(mdp, sec)) {
+      return res.json({ doitChanger: true, jeton: signerJeton(`changer:${refId}`, sec, 30 * 60e3), prenom: (await enfantPour(refId, sec)).prenom });
     }
+    throw httpError(401, "Identifiant ou mot de passe incorrect.");
   }
-  if (!refIds.length) throw httpError(401, req.body?.code ? "Code incorrect." : "Adresse ou mot de passe incorrect.");
-  const refs = await elevesReference();
-  res.json({ enfants: refIds.map(id => { const r = refs.find(x => x.id === id); return { jeton: signerJeton(id, sec), prenom: r?.prenom || "", nom: r?.nom || "" }; }) });
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  const mdp = String(req.body?.motDePasse || "").trim();
+  let refIds: string[] = [];
+  if (emailValide(email) && mdp) {
+    const snap = await db.collection("parents").where("email", "==", email).get();
+    refIds = Array.from(new Set(snap.docs.filter(d => correspond(mdp, String(d.get("empreinte")))).map(d => String(d.get("refId")))));
+  }
+  if (!refIds.length) throw httpError(401, "Adresse ou mot de passe incorrect.");
+  res.json({ enfants: await Promise.all(refIds.map(id => enfantPour(id, sec))) });
+}));
+
+// Mot de passe choisi par l'élève : à la première connexion (jeton « changer: »), ou plus tard depuis son espace.
+app.post("/api/famille/mot-de-passe", route(async (req, res) => {
+  if (!limiteFamille(String(req.ip))) throw httpError(429, "Trop d'essais. Réessayez dans un quart d'heure.");
+  const sec = await secret();
+  const lu = lireJeton(String(req.body?.jeton || ""), sec);
+  const refId = lu?.startsWith("changer:") ? lu.slice(8) : lu;
+  if (!refId) throw httpError(401, "Reconnectez-vous avec votre code.");
+  const nouveau = String(req.body?.nouveau || "").trim();
+  if (nouveau.length < MDP_MIN || nouveau.length > 100) throw httpError(400, `Le mot de passe doit avoir au moins ${MDP_MIN} caractères.`);
+  const ref = db.doc(`codesEleves/${refId}`);
+  if (!(await ref.get()).exists) throw httpError(404, "Accès introuvable : demandez un nouveau code à votre enseignant.");
+  await ref.set({ mdp: empreinte(nouveau), mdpLe: new Date().toISOString() }, { merge: true });
+  res.json({ enfants: [await enfantPour(refId, sec)] });
 }));
 
 app.get("/api/famille", route(async (req, res) => {
   const h = String(req.headers.authorization || "");
-  const refId = h.startsWith("Famille ") ? lireJeton(h.slice(8).trim(), await secret()) : null;
-  if (!refId) throw httpError(401, "Connectez-vous avec votre code.");
+  const lu = h.startsWith("Famille ") ? lireJeton(h.slice(8).trim(), await secret()) : null;
+  const refId = lu && !lu.startsWith("changer:") ? lu : null;
+  if (!refId) throw httpError(401, "Connectez-vous avec votre identifiant.");
   const snap = await db.collection("publications").where("refIds", "array-contains", refId).get();
   const docs = snap.docs.map(d => d.data());
   const nom = docs.map(d => d.noms?.[refId]).find(Boolean) || null;
