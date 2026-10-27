@@ -238,6 +238,13 @@ t('codes : élèves suivis de la classe, sans code', listeCodes.length === 2 && 
 t('mot de passe de classe trop court : refusé', (await jean('/api/famille/codes', { classe: '5B', motDeClasse: 'abc' })).status === 400);
 const cc = (await jean('/api/famille/codes', { classe: '5B', motDeClasse: 'Classe-5B' })).data;
 t('fiches : identifiant de chaque élève et mot de passe de classe commun', cc.codes.length === 2 && cc.motDeClasse === 'Classe-5B' && cc.codes.every(c => c.code === 'Classe-5B') && cc.codes.find(c => c.id === '5b_durand_alice')?.identifiant === 'alice.durand.5b' && cc.adresse.endsWith('/famille'), cc);
+const ann = (await famille('/api/famille/annuaire')).data.enseignants;
+t('accueil : l’enseignant et sa classe sont proposés', ann.length === 1 && ann[0].uid === uidJean && ann[0].classes.length === 1 && ann[0].classes[0].cle === '5b', ann);
+const annE = (await famille(`/api/famille/annuaire/eleves?enseignant=${uidJean}&classe=5b`)).data.eleves;
+t('accueil : prénom et initiale du nom des élèves', JSON.stringify(annE?.map(x => x.nom)) === '["Alice D.","Bob L."]', annE);
+t('accueil : classe inconnue', (await famille(`/api/famille/annuaire/eleves?enseignant=${uidJean}&classe=4z`)).status === 404);
+t('accueil : élève choisi dans la liste, mauvais mot de passe', (await famille('/api/famille/connexion', null, { refId: '5b_leroy_bob', motDePasse: 'Faux' })).status === 401);
+t('accueil : élève choisi dans la liste, mot de passe de classe', (await famille('/api/famille/connexion', null, { refId: '5b_leroy_bob', motDePasse: 'Classe-5B' })).data.doitChanger === true);
 t('pas de nouvelle fiche pour les élèves qui en ont une', (await jean('/api/famille/codes', { classe: '5B' })).data.codes.length === 0);
 t('mauvais mot de passe : refusé', (await famille('/api/famille/connexion', null, { identifiant: 'alice.durand.5b', motDePasse: 'Faux' })).status === 401);
 const cx0 = await famille('/api/famille/connexion', null, { identifiant: ' Alice.Durand.5B ', motDePasse: 'Classe-5B' });

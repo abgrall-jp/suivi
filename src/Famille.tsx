@@ -54,40 +54,79 @@ export function EspaceFamille() {
 function ConnexionFamille({ onOk, onChanger }: { onOk: (e: Enfant[]) => void; onChanger: (jeton: string, prenom: string) => void }) {
   // Arrivée depuis l'accueil : « ?qui=eleve » (identifiant seulement) ou « ?qui=parent » (identifiant de l'enfant ou e-mail).
   const qui = new URLSearchParams(location.search).get("qui");
-  const [mode, setMode] = useState<"eleve" | "parent">("eleve");
+  // liste : enseignant, classe, nom, puis mot de passe (élèves et parents) ; identifiant : celui de la fiche ; email : mot de passe parent.
+  const [mode, setMode] = useState<"liste" | "identifiant" | "email">("liste");
+  const [annuaire, setAnnuaire] = useState<{ uid: string; nom: string; classes: { cle: string; nom: string }[] }[] | null>(null);
+  const [ens, setEns] = useState("");
+  const [classe, setClasse] = useState("");
+  const [eleves, setEleves] = useState<{ id: string; nom: string }[] | null>(null);
+  const [refId, setRefId] = useState("");
   const [identifiant, setIdentifiant] = useState("");
   const [email, setEmail] = useState("");
   const [mdp, setMdp] = useState("");
   const [msg, setMsg] = useState("");
   const [occupe, setOccupe] = useState(false);
+  useEffect(() => {
+    fetch("/api/famille/annuaire").then(r => r.json()).then(d => setAnnuaire(d.enseignants || [])).catch(() => setAnnuaire([]));
+  }, []);
+  const classes = annuaire?.find(e => e.uid === ens)?.classes || [];
+  useEffect(() => {
+    setEleves(null); setRefId("");
+    if (!ens || !classe) return;
+    fetch(`/api/famille/annuaire/eleves?enseignant=${encodeURIComponent(ens)}&classe=${encodeURIComponent(classe)}`)
+      .then(r => r.json()).then(d => setEleves(d.eleves || [])).catch(() => setEleves([]));
+  }, [ens, classe]);
   const envoyer = async (ev: FormEvent) => {
     ev.preventDefault();
     setMsg(""); setOccupe(true);
     try {
-      const d = await poster("/api/famille/connexion", mode === "eleve" ? { identifiant, motDePasse: mdp } : { email: email.trim(), motDePasse: mdp });
+      const d = await poster("/api/famille/connexion", mode === "liste" ? { refId, motDePasse: mdp } : mode === "identifiant" ? { identifiant, motDePasse: mdp } : { email: email.trim(), motDePasse: mdp });
       if (d.doitChanger) onChanger(d.jeton, d.prenom); else onOk(d.enfants);
     } catch (e: any) { setMsg(e.message); } finally { setOccupe(false); }
   };
+  const tu = qui === "eleve";
   return (
     <div className="centre carte connexion">
       <p className="petit"><a href="/">← Accueil</a></p>
-      <h1>{qui === "eleve" ? "Accueil élève" : qui === "parent" ? "Accueil parent" : "Suivi · Famille"}</h1>
-      <p>{qui === "eleve" ? "Tes résultats et ton bulletin, publiés par tes enseignants." : "Les résultats et le bulletin publiés par les enseignants."}</p>
-      {qui !== "eleve" && <div className="onglets">
-        <button className={mode === "eleve" ? "actif" : ""} onClick={() => setMode("eleve")}>{qui === "parent" ? "Identifiant de mon enfant" : "Élève ou parent : identifiant"}</button>
-        <button className={mode === "parent" ? "actif" : ""} onClick={() => setMode("parent")}>{qui === "parent" ? "Mon adresse e-mail" : "Parent : e-mail"}</button>
-      </div>}
+      <h1>{tu ? "Accueil élève" : qui === "parent" ? "Accueil parent" : "Suivi · Famille"}</h1>
+      <p>{tu ? "Tes résultats et ton bulletin, publiés par tes enseignants." : "Les résultats et le bulletin publiés par les enseignants."}</p>
       <form onSubmit={envoyer}>
-        {mode === "eleve"
-          ? <input placeholder="Identifiant (ex. : alice.durand.5b)" value={identifiant} onChange={e => setIdentifiant(e.target.value)} required autoComplete="username" autoCapitalize="off" />
-          : <input type="email" placeholder="Adresse e-mail" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email" />}
-        <input type="password" placeholder={mode === "eleve" ? "Mot de passe (la 1re fois : celui de la classe)" : "Mot de passe parent"} value={mdp} onChange={e => setMdp(e.target.value)} required autoComplete="current-password" />
+        {mode === "liste" && <>
+          <label className="etape">1. {tu ? "Ton enseignant" : "L'enseignant"}
+            <select value={ens} onChange={e => { setEns(e.target.value); setClasse(""); }} required>
+              <option value="">{annuaire === null ? "Chargement…" : annuaire.length ? "Choisir…" : "Aucun enseignant pour l'instant"}</option>
+              {(annuaire || []).map(e => <option key={e.uid} value={e.uid}>{e.nom}</option>)}
+            </select>
+          </label>
+          <label className="etape">2. {tu ? "Ta classe" : "La classe"}
+            <select value={classe} onChange={e => setClasse(e.target.value)} required disabled={!ens}>
+              <option value="">Choisir…</option>
+              {classes.map(c => <option key={c.cle} value={c.cle}>{c.nom}</option>)}
+            </select>
+          </label>
+          <label className="etape">3. {tu ? "Ton nom" : "Le nom de l'élève"}
+            <select value={refId} onChange={e => setRefId(e.target.value)} required disabled={!eleves}>
+              <option value="">{ens && classe && !eleves ? "Chargement…" : "Choisir…"}</option>
+              {(eleves || []).map(x => <option key={x.id} value={x.id}>{x.nom}</option>)}
+            </select>
+          </label>
+        </>}
+        {mode === "identifiant" && <input placeholder="Identifiant (ex. : alice.durand.5b)" value={identifiant} onChange={e => setIdentifiant(e.target.value)} required autoComplete="username" autoCapitalize="off" />}
+        {mode === "email" && <input type="email" placeholder="Adresse e-mail" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email" />}
+        <label className="etape">{mode === "liste" ? "4. " : ""}Mot de passe
+          <input type="password" placeholder={mode === "email" ? "Mot de passe parent" : "La 1re fois : celui de la classe"} value={mdp} onChange={e => setMdp(e.target.value)} required autoComplete="current-password" />
+        </label>
         <button type="submit" className="principal" disabled={occupe}>Entrer</button>
       </form>
       {msg && <p className="erreur">{msg}</p>}
-      <p className="petit">{mode === "eleve"
-        ? "Mot de passe oublié ? Demandez à votre enseignant un nouveau mot de passe de départ."
-        : <a href="/parents">Mot de passe parent perdu ?</a>}</p>
+      <p className="petit">{mode === "email"
+        ? <a href="/parents">Mot de passe parent perdu ?</a>
+        : `Mot de passe oublié ? ${tu ? "Demande" : "Demandez"} à l'enseignant un nouveau mot de passe de départ. Les parents utilisent le même mot de passe que l'élève.`}</p>
+      <p className="petit">
+        {mode !== "liste" && <button className="lien" onClick={() => setMode("liste")}>Choisir l'enseignant, la classe et le nom</button>}
+        {mode !== "identifiant" && <button className="lien" onClick={() => setMode("identifiant")}>{tu ? "J'ai un identifiant" : "Avec l'identifiant de la fiche"}</button>}
+        {!tu && mode !== "email" && <button className="lien" onClick={() => setMode("email")}>Parent : avec mon adresse e-mail</button>}
+      </p>
     </div>
   );
 }
@@ -240,7 +279,8 @@ export function VueCodesFamille() {
               <div key={c.id} className="fiche-code">
                 <strong>{c.prenom} {c.nom}</strong> <span className="petit">({c.classe})</span>
                 <div>Adresse : {fiches.adresse}</div>
-                <div>Identifiant : <span className="code">{c.identifiant}</span></div>
+                <div>Accueil élève : choisis ton enseignant, ta classe et ton nom.</div>
+                <div className="petit-fiche">(ou identifiant : <span className="code">{c.identifiant}</span>)</div>
                 <div>Mot de passe de départ : <span className="code">{c.code}</span></div>
                 <div className="petit-fiche">À la première connexion, choisis ton mot de passe. Tes parents utiliseront le même.</div>
               </div>

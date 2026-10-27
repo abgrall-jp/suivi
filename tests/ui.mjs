@@ -101,7 +101,12 @@ const ident = await p.locator('.fiche-code:has-text("Alice") .code').first().inn
 const f = await (await b.newContext()).newPage();
 f.on('pageerror', e => erreurs.push(String(e)));
 await f.goto('http://127.0.0.1:3300/famille?qui=eleve');
-await f.fill('input[autocomplete=username]', ident);
+await f.waitForSelector('label.etape select option:nth-child(2)', { state: 'attached' });
+await f.selectOption('label.etape:has-text("enseignant") select', { index: 1 });
+await f.selectOption('label.etape:has-text("classe") select', { index: 1 });
+await f.waitForSelector('label.etape:has-text("nom") select option:has-text("Alice D.")', { state: 'attached' });
+await f.selectOption('label.etape:has-text("nom") select', { label: 'Alice D.' });
+await f.screenshot({ path: `${OUT}/12-0-accueil-eleve.png` });
 await f.fill('input[type=password]', 'Classe-5B');
 await f.click('button:has-text("Entrer")');
 await f.waitForSelector('text=Choisissez votre mot de passe');

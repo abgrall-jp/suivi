@@ -1017,11 +1017,25 @@ app.post("/api/publier/bulletin", exigerEnseignant(), route(async (req, res) => 
 // identifiants/{identifiant} : refId. « Nouveau code » (mot de passe oublié) efface le mot de passe choisi.
 const identifiantDe = (r: EleveRef) => normaliserCode(`${r.prenom} ${r.nom} ${cleClasse(r.classe)}`).replace(/-/g, ".");
 
+// Annuaire de l'accueil élève/parent : on choisit son enseignant, sa classe, puis son nom, avant le mot de passe.
+// annuaire/{uid}__{classe} : uid, enseignant, classe, classeNom, eleves { refId: { prenom, nom } } — seulement les élèves qui ont un accès.
+async function majAnnuaire(e: Enseignant, classe: string, eleves: EleveRef[]) {
+  const docs = eleves.length ? await db.getAll(...eleves.map(r => db.doc(`codesEleves/${r.id}`))) : [];
+  const avecAcces = eleves.filter((_, i) => docs[i]?.exists);
+  const ref = db.doc(`annuaire/${e.uid}__${classe}`);
+  if (!avecAcces.length) { await ref.delete(); return; }
+  await ref.set({
+    uid: e.uid, enseignant: await nomEnseignant(e), classe, classeNom: avecAcces[0].classe, majLe: new Date().toISOString(),
+    eleves: Object.fromEntries(avecAcces.map(r => [r.id, { prenom: r.prenom, nom: r.nom }])),
+  });
+}
+
 app.get("/api/famille/codes", exigerEnseignant(), route(async (req, res) => {
   const classe = cleClasse(String(req.query.classe || ""));
   const t = await calculerTableau(ensDe(req));
   const eleves = elevesSuivis(t, classe);
   const docs = eleves.length ? await db.getAll(...eleves.map(r => db.doc(`codesEleves/${r.id}`))) : [];
+  if (classe) await majAnnuaire(ensDe(req), classe, eleves);
   res.json({ eleves: eleves.map((r, i) => ({
     id: r.id, nom: r.nom, prenom: r.prenom, classe: r.classe, codeLe: docs[i]?.get("le") || null,
     identifiant: docs[i]?.get("identifiant") || null, personnalise: !!docs[i]?.get("mdp"),
@@ -1062,10 +1076,52 @@ app.post("/api/famille/codes", exigerEnseignant(), route(async (req, res) => {
     await lot.commit();
     codes.push({ id: r.id, nom: r.nom, prenom: r.prenom, classe: r.classe, identifiant, code });
   }
+  if (classe) await majAnnuaire(e, classe, elevesSuivis(t, classe));
   res.json({ codes, adresse: `${ADRESSE}/famille`, motDeClasse: codes.length && codeCommun ? codeCommun : null });
 }));
 
+// Essais de mot de passe : 10 par quart d'heure pour un même élève depuis une même adresse (toute une classe
+// partage souvent la même adresse au collège), et 300 au total par adresse.
 const limiteFamille = makeLimiter(10, 15 * 60 * 1000);
+const limiteFamilleIp = makeLimiter(300, 15 * 60 * 1000);
+const essaiFamille = (ip: string, qui: unknown) => {
+  if (!limiteFamilleIp(ip) || !limiteFamille(`${ip}|${String(qui ?? "").slice(0, 200).toLowerCase()}`)) throw httpError(429, "Trop d'essais. Réessayez dans un quart d'heure.");
+};
+
+// Prénom et initiale du nom (« Alice D. ») ; le nom entier seulement si deux élèves de la classe s'appelleraient pareil.
+function nomsAffiches(eleves: { id: string; prenom: string; nom: string }[]) {
+  const court = (x: { prenom: string; nom: string }) => `${x.prenom} ${x.nom.trim().charAt(0).toUpperCase()}.`.trim();
+  const compte = new Map<string, number>();
+  for (const x of eleves) compte.set(court(x), (compte.get(court(x)) || 0) + 1);
+  return eleves.map(x => ({ id: x.id, nom: compte.get(court(x))! > 1 ? `${x.prenom} ${x.nom}`.trim() : court(x) }))
+    .sort((a, b) => a.nom.localeCompare(b.nom, "fr"));
+}
+const limiteAnnuaire = makeLimiter(300, 15 * 60 * 1000);
+
+app.get("/api/famille/annuaire", route(async (req, res) => {
+  if (!limiteAnnuaire(String(req.ip))) throw httpError(429, "Trop de demandes. Réessayez dans un quart d'heure.");
+  const snap = await db.collection("annuaire").get();
+  const parEns = new Map<string, { uid: string; nom: string; classes: { cle: string; nom: string }[] }>();
+  for (const d of snap.docs) {
+    const x = d.data();
+    const ens = parEns.get(x.uid) || { uid: String(x.uid), nom: String(x.enseignant || ""), classes: [] };
+    ens.classes.push({ cle: String(x.classe), nom: String(x.classeNom || x.classe) });
+    parEns.set(x.uid, ens);
+  }
+  const enseignants = Array.from(parEns.values()).map(e => ({ ...e, classes: e.classes.sort((a, b) => a.nom.localeCompare(b.nom, "fr")) }))
+    .sort((a, b) => a.nom.localeCompare(b.nom, "fr"));
+  res.json({ enseignants });
+}));
+
+app.get("/api/famille/annuaire/eleves", route(async (req, res) => {
+  if (!limiteAnnuaire(String(req.ip))) throw httpError(429, "Trop de demandes. Réessayez dans un quart d'heure.");
+  const uid = String(req.query.enseignant || "").replace(/[^A-Za-z0-9_-]/g, "");
+  const classe = cleClasse(String(req.query.classe || ""));
+  const d = uid && classe ? (await db.doc(`annuaire/${uid}__${classe}`).get()).data() : null;
+  if (!d) throw httpError(404, "Classe introuvable.");
+  res.json({ eleves: nomsAffiches(Object.entries<any>(d.eleves || {}).map(([id, x]) => ({ id, prenom: String(x?.prenom || ""), nom: String(x?.nom || "") }))) });
+}));
+
 const enfantPour = async (refId: string, sec: string) => {
   const r = (await elevesReference()).find(x => x.id === refId) || (await db.doc(`codesEleves/${refId}`).get()).data();
   return { jeton: signerJeton(refId, sec), prenom: String(r?.prenom || ""), nom: String(r?.nom || "") };
@@ -1073,19 +1129,21 @@ const enfantPour = async (refId: string, sec: string) => {
 const MDP_MIN = 8;
 
 app.post("/api/famille/connexion", route(async (req, res) => {
-  if (!limiteFamille(String(req.ip))) throw httpError(429, "Trop d'essais. Réessayez dans un quart d'heure.");
+  essaiFamille(String(req.ip), req.body?.refId ?? req.body?.identifiant ?? req.body?.email);
   const sec = await secret();
-  if (req.body?.identifiant !== undefined) {
-    const id = normaliserCode(req.body.identifiant).replace(/-/g, ".");
+  // Élève (ou parent) choisi dans l'accueil (enseignant, classe, nom) ou, comme avant, avec l'identifiant de sa fiche.
+  if (req.body?.refId !== undefined || req.body?.identifiant !== undefined) {
+    const choisi = req.body?.refId !== undefined ? String(req.body.refId).slice(0, 200) : "";
+    const id = choisi ? "" : normaliserCode(req.body.identifiant).replace(/-/g, ".");
     const mdp = String(req.body?.motDePasse || "").trim();
-    const refId = id ? (await db.doc(`identifiants/${id}`).get()).get("refId") : null;
+    const refId = choisi && !choisi.includes("/") ? choisi : id ? (await db.doc(`identifiants/${id}`).get()).get("refId") : null;
     const c = refId ? (await db.doc(`codesEleves/${refId}`).get()).data() : null;
     if (c?.mdp && correspond(mdp, c.mdp)) return res.json({ enfants: [await enfantPour(refId, sec)] });
     // Code de départ : accepté seulement tant que l'élève n'a pas choisi son mot de passe.
     if (c && !c.mdp && c.h === empreinteCodeFamille(mdp, sec)) {
       return res.json({ doitChanger: true, jeton: signerJeton(`changer:${refId}`, sec, 30 * 60e3), prenom: (await enfantPour(refId, sec)).prenom });
     }
-    throw httpError(401, "Identifiant ou mot de passe incorrect.");
+    throw httpError(401, "Mot de passe incorrect.");
   }
   const email = String(req.body?.email || "").trim().toLowerCase();
   const mdp = String(req.body?.motDePasse || "").trim();
@@ -1100,7 +1158,7 @@ app.post("/api/famille/connexion", route(async (req, res) => {
 
 // Mot de passe choisi par l'élève : à la première connexion (jeton « changer: »), ou plus tard depuis son espace.
 app.post("/api/famille/mot-de-passe", route(async (req, res) => {
-  if (!limiteFamille(String(req.ip))) throw httpError(429, "Trop d'essais. Réessayez dans un quart d'heure.");
+  essaiFamille(String(req.ip), String(req.body?.jeton || "").slice(0, 60));
   const sec = await secret();
   const lu = lireJeton(String(req.body?.jeton || ""), sec);
   const refId = lu?.startsWith("changer:") ? lu.slice(8) : lu;

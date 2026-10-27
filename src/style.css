@@ -152,3 +152,6 @@ td.manuelle input.note { color: var(--manuelle-texte); font-weight: 600; backgro
 .porte .icone { font-size: 36px; }
 .porte strong { font-size: 1.1rem; }
 .porte span:last-child { color: var(--doux); font-size: 14px; }
+.connexion label.etape { display: flex; flex-direction: column; gap: 4px; text-align: left; font-size: 14px; font-weight: 600; }
+.connexion label.etape select, .connexion label.etape input { font-weight: 400; }
+.connexion p.petit button.lien { display: block; margin: 6px auto 0; }
