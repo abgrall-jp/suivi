@@ -8,8 +8,8 @@ type Periodes = Record<Trimestre, { debut: string; fin: string }>;
 type Colonne = { cle: string; app: string; titre: string; coef?: number };
 type Externe = { id: string; titre: string };
 type LigneBulletin = {
-  id: string; nom: string; prenom: string; calculee: number | null; notes?: Record<string, number | null>; manuelles?: string[]; finale: number | null; figeeLe: string | null;
-  externes: Record<string, number | null>; appreciation: string; studio?: { eleve: string; prof: string };
+  id: string; nom: string; prenom: string; calculee: number | null; notes?: Record<string, number | null>; manuelles?: string[]; autres?: Record<string, { note: number | null; manuelle: boolean }>; finale: number | null; figeeLe: string | null;
+  externes: Record<string, number | null>; appreciation: string; appreciationEcrite?: boolean; studio?: { eleve: string; prof: string };
   remarques?: { date: string; seance: string; texte: string }[];
 };
 type Bulletin = {
@@ -83,8 +83,8 @@ export function VueBulletin() {
   const pret = !!(classe && b.eleves && b.colonnes?.length && !reglage);
 
   const exporter = () => {
-    const entete = ["Nom", "Prénom", ...colonnes.map(c => `${c.titre} (coef. ${note(c.coef ?? 1)})`), "Moyenne calculée", "Note définitive", ...externes.map(x => x.titre), "Appréciation"];
-    const lignes = (b.eleves || []).map(e => [e.nom, e.prenom, ...colonnes.map(c => note(e.notes?.[c.cle])), note(e.calculee), note(e.finale), ...externes.map(x => note(e.externes[x.id])), e.appreciation]);
+    const entete = ["Nom", "Prénom", ...colonnes.map(c => `${c.titre} (coef. ${note(c.coef ?? 1)})`), "Moyenne calculée", "Note définitive", ...externes.map(x => x.titre), "Appréciation de l'élève", "Appréciation du professeur"];
+    const lignes = (b.eleves || []).map(e => [e.nom, e.prenom, ...colonnes.map(c => note(e.notes?.[c.cle])), note(e.calculee), note(e.finale), ...externes.map(x => note(e.externes[x.id])), e.studio?.eleve || "", e.appreciation]);
     const csv = [entete, ...lignes].map(l => l.map(c => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\r\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
@@ -114,7 +114,7 @@ export function VueBulletin() {
       {pret && (
         <>
           {!b.studioRelie && <p className="petit">Pour voir ici les appréciations écrites dans le Studio d'Appréciations, reliez-le dans « Mes applications ».</p>}
-          <p className="petit">Chaque colonne montre la note sur 20 du dernier essai du trimestre ; la moyenne calculée en tient compte avec les coefficients. Une note perdue ou absente ? Écrivez-la dans la case : elle apparaît <span className="manuelle-legende">en violet</span> et compte dans la moyenne (effacez-la pour revenir à la note des applications). Écrivez une note définitive, ou cliquez sur « Figer les notes » : elle ne sera plus mise à jour par le logiciel, mais vous pourrez toujours la changer.</p>
+          <p className="petit">Chaque colonne montre la note sur 20 du dernier essai du trimestre ; la moyenne calculée en tient compte avec les coefficients. Une note perdue ou absente ? Écrivez-la dans la case : elle apparaît <span className="manuelle-legende">en violet</span>. Si une case a deux notes (celle de l'application et celle saisie), la plus récente compte, l'autre est affichée à côté en petit. Écrivez une note définitive, ou cliquez sur « Figer les notes » : elle ne sera plus mise à jour par le logiciel, mais vous pourrez toujours la changer.</p>
           <div className="defile">
             <table className="tableau bulletin">
               <thead><tr>
@@ -126,7 +126,8 @@ export function VueBulletin() {
                   }} /></span></th>)}
                 <th>Moyenne calculée</th><th>Définitive</th>
                 {externes.map(x => <th key={x.id}>{x.titre}</th>)}
-                <th>Appréciation</th>
+                <th>Appréciation de l'élève<span className="coef">Studio, partie élève</span></th>
+                <th>Appréciation du professeur<span className="coef">{b.studioRelie ? "reprise du Studio, modifiable" : "à écrire"}</span></th>
               </tr></thead>
               <tbody>
                 {b.eleves!.map(e => (
@@ -136,6 +137,7 @@ export function VueBulletin() {
                       const manuelle = !!e.manuelles?.includes(c.cle);
                       return <td key={c.cle} className={manuelle ? "manuelle" : ""} title={manuelle ? "Note saisie à la main" : "Note des applications (saisir une note pour la remplacer)"}>
                         <ChampNote valeur={e.notes?.[c.cle] ?? null} indication="–" onValider={v => saisirNote(e.id, c.cle, v, manuelle)} />
+                        <AutreNote autre={e.autres?.[c.cle]} onEffacer={() => saisirNote(e.id, c.cle, "", true)} />
                       </td>;
                     })}
                     <td><strong>{note(e.calculee) || "–"}</strong></td>
@@ -146,12 +148,13 @@ export function VueBulletin() {
                     {externes.map(x => (
                       <td key={x.id}><ChampNote valeur={e.externes[x.id] ?? null} onValider={v => enregistrer(e.id, { externes: { ...e.externes, [x.id]: v } })} /></td>
                     ))}
+                    <td className="appreciation eleve">{e.studio?.eleve || <span className="petit">–</span>}</td>
                     <td className="appreciation">
                       <ChampTexte valeur={e.appreciation} onValider={v => enregistrer(e.id, { appreciation: v })} />
-                      {!!e.studio?.prof && e.studio.prof !== e.appreciation && (
+                      {!e.appreciationEcrite && !!e.studio?.prof && <div className="studio">Reprise du Studio</div>}
+                      {e.appreciationEcrite && !!e.studio?.prof && e.studio.prof !== e.appreciation && (
                         <div className="studio"><span>Studio : {e.studio.prof}</span> <button className="lien" onClick={() => enregistrer(e.id, { appreciation: e.studio!.prof })}>Reprendre</button></div>
                       )}
-                      {!!e.studio?.eleve && <div className="studio eleve">L'élève : {e.studio.eleve}</div>}
                       {!!e.remarques?.length && (
                         <details className="studio">
                           <summary>Plan de classe : {e.remarques.length} remarque{e.remarques.length > 1 ? "s" : ""}</summary>
@@ -168,6 +171,15 @@ export function VueBulletin() {
       )}
     </section>
   );
+}
+
+/** L'autre note de la colonne, à côté de celle qui compte : celle de l'application (gris) ou celle saisie à la main (violet). */
+function AutreNote({ autre, onEffacer }: { autre?: { note: number | null; manuelle: boolean }; onEffacer: () => void }) {
+  if (!autre || autre.note === null) return null;
+  return autre.manuelle
+    ? <span className="autre-note manuelle-legende" title="Note saisie à la main, plus ancienne que celle de l'application : elle ne compte pas">{note(autre.note)}
+      <button className="lien" title="Effacer la note saisie" onClick={onEffacer}>✕</button></span>
+    : <span className="autre-note appli" title="Note de l'application, plus ancienne que la note saisie : elle ne compte pas">{note(autre.note)}</span>;
 }
 
 function ChampNote({ valeur, indication, onValider }: { valeur: number | null; indication?: string; onValider: (v: string) => void }) {

@@ -42,7 +42,7 @@ function Enseignants() {
   useEffect(() => { if (moi?.choisies) api("/api/pp").then(setPp).catch(() => setPp(null)); }, [moi?.email, moi?.choisies]);
 
   if (user === undefined) return <div className="centre">Chargement…</div>;
-  if (!user) return <Connexion />;
+  if (!user) return <Accueil />;
   if (erreur && !moi) return (
     <div className="centre carte">
       <p className="erreur">{erreur}</p>
@@ -85,8 +85,25 @@ function Enseignants() {
   );
 }
 
+// --- Accueil : élève, parent ou professeur --------------------------------------------------
+function Accueil() {
+  const [prof, setProf] = useState(false);
+  if (prof) return <Connexion onRetour={() => setProf(false)} />;
+  return (
+    <div className="centre large accueil">
+      <h1>Suivi</h1>
+      <p>Les résultats et les bulletins de toutes les applications Je peux apprendre, au même endroit.</p>
+      <div className="portes">
+        <a className="porte carte" href="/famille?qui=eleve"><span className="icone">🎒</span><strong>Accueil élève</strong><span>Mes résultats et mon bulletin, avec mon identifiant.</span></a>
+        <a className="porte carte" href="/famille?qui=parent"><span className="icone">👪</span><strong>Accueil parent</strong><span>Les résultats et le bulletin de mon enfant.</span></a>
+        <button className="porte carte" onClick={() => setProf(true)}><span className="icone">🧑‍🏫</span><strong>Accueil professeur</strong><span>Tableau des résultats, bulletin, publication pour les familles.</span></button>
+      </div>
+    </div>
+  );
+}
+
 // --- Connexion ---------------------------------------------------------------------------
-function Connexion() {
+function Connexion({ onRetour }: { onRetour: () => void }) {
   const [mode, setMode] = useState<"connexion" | "inscription">("connexion");
   const [email, setEmail] = useState("");
   const [mdp, setMdp] = useState("");
@@ -107,7 +124,8 @@ function Connexion() {
 
   return (
     <div className="centre carte connexion">
-      <h1>Suivi</h1>
+      <p className="petit"><button className="lien" onClick={onRetour}>← Accueil</button></p>
+      <h1>Suivi · Professeur</h1>
       <p>Les résultats de vos élèves dans toutes les applications Je peux apprendre, au même endroit.</p>
       <button className="principal" onClick={() => connexionGoogle().catch(e => setMsg(messageAuth(e)))}>Se connecter avec Google</button>
       <div className="ou">ou avec votre adresse e-mail</div>
@@ -387,7 +405,10 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
                     if (saisie === `${e.id}|${cle}`) return <td key={cle} className="saisie"><CaseNote initiale={r?.manuelle ? String(r.percent / 5).replace(".", ",") : ""} onValider={v => saisirNote(e.id, cle, v)} onAnnuler={() => setSaisie(null)} /></td>;
                     return <td key={cle} className={`${r ? couleur(r.percent) : "vide"}${r?.manuelle ? " manuelle" : ""} modifiable`} onClick={() => setSaisie(`${e.id}|${cle}`)}
                       title={r ? `${r.manuelle ? "Saisie à la main" : r.score} · ${dateCourte(r.at)}\nCliquer pour corriger` : "Cliquer pour saisir une note sur 20"}>
-                      {r ? <>{r.score && <span className="note">{r.score.replace(/\s*\/\s*/, "/")}</span>}{Math.round(r.percent)} %</> : ""}</td>;
+                      {r ? <>{r.score && <span className="note">{r.score.replace(/\s*\/\s*/, "/")}</span>}{Math.round(r.percent)} %</> : ""}
+                      {e.autres?.[cle] && <span className={`autre-note ${e.autres[cle].manuelle ? "manuelle-legende" : "appli"}`}
+                        title={e.autres[cle].manuelle ? "Note saisie à la main, plus ancienne : elle ne compte pas" : "Note de l'application, plus ancienne que la note saisie : elle ne compte pas"}>
+                        {e.autres[cle].manuelle ? e.autres[cle].score : `${Math.round(e.autres[cle].percent)} %`}</span>}</td>;
                   }))}
                 </tr>
               ))}

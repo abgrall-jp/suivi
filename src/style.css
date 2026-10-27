@@ -139,3 +139,16 @@ td.manuelle input.note { color: var(--manuelle-texte); font-weight: 600; backgro
 .tableau td.modifiable { cursor: pointer; }
 .tableau td.modifiable:hover { outline: 2px solid var(--accent); outline-offset: -2px; }
 .tableau td.saisie input.note { width: 64px; text-align: center; padding: 4px 6px; }
+.autre-note { display: inline-block; margin-left: 4px; font-size: 12px; padding: 1px 5px; border-radius: 4px; white-space: nowrap; }
+.autre-note.appli { background: var(--fond); color: var(--doux); border: 1px solid var(--bord); }
+.autre-note button.lien { font-size: 11px; text-decoration: none; padding: 0 0 0 3px; }
+.bulletin td.appreciation.eleve { min-width: 180px; max-width: 260px; font-size: 13px; white-space: pre-line; }
+.tableau td .autre-note { font-weight: 600; }
+/* Accueil : trois portes (élève, parent, professeur). */
+.accueil { text-align: center; }
+.portes { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; margin-top: 24px; }
+.porte { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 24px 16px; text-decoration: none; color: var(--texte); font: inherit; cursor: pointer; text-align: center; }
+.porte:hover { border-color: var(--accent); }
+.porte .icone { font-size: 36px; }
+.porte strong { font-size: 1.1rem; }
+.porte span:last-child { color: var(--doux); font-size: 14px; }

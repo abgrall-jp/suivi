@@ -133,6 +133,7 @@ t('Studio relié sans clé ni code', (await jean('/api/apps/relier', { app: 'app
 bu = (await jean('/api/bulletin?trimestre=T1&classe=5B')).data;
 const ligne = (id) => bu.eleves.find(e => e.id === id);
 t('appréciation du Studio proposée pour Alice', ligne('5b_durand_alice')?.studio?.prof === 'Alice participe beaucoup.', ligne('5b_durand_alice'));
+t('sans appréciation écrite dans Suivi : celle du Studio (partie prof) est reprise', ligne('5b_durand_alice')?.appreciation === 'Alice participe beaucoup.' && ligne('5b_durand_alice')?.appreciationEcrite === false);
 t('appréciation écrite par Alice elle-même', ligne('5b_durand_alice')?.studio?.eleve === 'Je dois relire mes leçons.');
 t('appréciation d’un autre enseignant : pas montrée', !ligne('5b_leroy_bob')?.studio?.prof);
 // Plan de classe IA : autre projet, lu directement ; l'enseignant est reconnu par son adresse.
@@ -171,7 +172,10 @@ console.log('Notes saisies à la main');
   const bob1 = (await jean('/api/bulletin?trimestre=T1&classe=5B')).data.eleves.find(e => e.id === '5b_leroy_bob');
   t('bulletin : la note saisie est dans la colonne et marquée', bob1.notes[vide.cle] === 16.5 && bob1.manuelles.includes(vide.cle) && bob1.manuelles.length === 1, bob1);
   t('bulletin : la moyenne en tient compte', bob1.calculee !== bob0.calculee && bob1.calculee > bob0.calculee, [bob0.calculee, bob1.calculee]);
-  const r = (await jean('/api/tableau')).data.eleves.find(e => e.id === '5b_leroy_bob').resultats[vide.cle];
+  t('bulletin : la note de l’application (0) reste visible à côté', bob1.autres?.[vide.cle]?.note === 0 && bob1.autres[vide.cle].manuelle === false, bob1.autres);
+  const lb = (await jean('/api/tableau')).data.eleves.find(e => e.id === '5b_leroy_bob');
+  t('tableau : la note de l’application reste visible à côté', lb.autres?.[vide.cle]?.percent === 0 && !lb.autres[vide.cle].manuelle, lb.autres);
+  const r = lb.resultats[vide.cle];
   t('tableau : la note saisie apparaît, marquée', r?.manuelle === true && r.percent === 82.5 && r.score === '16,5/20', r);
   await jean('/api/bulletin/colonnes', { trimestre: 'T2', classe: '5B', colonnes: b0.colonnes });
   t('2e trimestre : la note saisie pour le 1er n’y compte pas', (await jean('/api/bulletin?trimestre=T2&classe=5B')).data.eleves.find(e => e.id === '5b_leroy_bob').notes[vide.cle] === null, 'T2');
@@ -252,6 +256,7 @@ t('Alice voit son nom', vue.eleve?.prenom === 'Alice');
 t('tableau : seulement la colonne publiée et son propre résultat', vue.tableaux.length === 1 && vue.tableaux[0].colonnes.length === 1 && vue.tableaux[0].resultats['textetrous:ex1']?.percent === 90, vue.tableaux);
 t('bulletin : sa note définitive et son appréciation', vue.bulletins[0]?.moyenne === 15.5 && vue.bulletins[0].definitive && vue.bulletins[0].appreciation === 'Très bon trimestre.' && vue.bulletins[0].externesNotes.oral === 12, vue.bulletins);
 t('rien sur les camarades', !JSON.stringify(vue).includes('Leroy') && !JSON.stringify(vue).includes('LEROY'));
+t('famille : appréciation de l’élève (Studio) et du professeur', vue.bulletins[0]?.autoEval === 'Je dois relire mes leçons.', vue.bulletins);
 await jean('/api/notes-manuelles', { refId: '5b_durand_alice', cle: 'textetrous:ex1', note: 17 });
 await jean('/api/publier/tableau', { classe: '5B' });
 const vueM = (await famille('/api/famille', cx.data.enfants[0].jeton)).data;

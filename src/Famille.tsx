@@ -13,7 +13,7 @@ type VueFamille = {
   tableaux: { enseignant: string; classe: string; publieLe: string; colonnes: Colonne[]; resultats: Record<string, { percent: number; score: string; manuelle?: boolean }> }[];
   bulletins: {
     enseignant: string; classe: string; trimestre: string; publieLe: string; colonnes: Colonne[]; externes: { id: string; titre: string }[];
-    notes: Record<string, number | null>; manuelles?: string[]; moyenne: number | null; definitive: boolean; externesNotes: Record<string, number | null>; appreciation: string;
+    notes: Record<string, number | null>; manuelles?: string[]; moyenne: number | null; definitive: boolean; externesNotes: Record<string, number | null>; appreciation: string; autoEval?: string;
   }[];
 };
 
@@ -52,6 +52,8 @@ export function EspaceFamille() {
 }
 
 function ConnexionFamille({ onOk, onChanger }: { onOk: (e: Enfant[]) => void; onChanger: (jeton: string, prenom: string) => void }) {
+  // Arrivée depuis l'accueil : « ?qui=eleve » (identifiant seulement) ou « ?qui=parent » (identifiant de l'enfant ou e-mail).
+  const qui = new URLSearchParams(location.search).get("qui");
   const [mode, setMode] = useState<"eleve" | "parent">("eleve");
   const [identifiant, setIdentifiant] = useState("");
   const [email, setEmail] = useState("");
@@ -68,12 +70,13 @@ function ConnexionFamille({ onOk, onChanger }: { onOk: (e: Enfant[]) => void; on
   };
   return (
     <div className="centre carte connexion">
-      <h1>Suivi · Famille</h1>
-      <p>Les résultats et le bulletin publiés par les enseignants.</p>
-      <div className="onglets">
-        <button className={mode === "eleve" ? "actif" : ""} onClick={() => setMode("eleve")}>Élève ou parent : identifiant</button>
-        <button className={mode === "parent" ? "actif" : ""} onClick={() => setMode("parent")}>Parent : e-mail</button>
-      </div>
+      <p className="petit"><a href="/">← Accueil</a></p>
+      <h1>{qui === "eleve" ? "Accueil élève" : qui === "parent" ? "Accueil parent" : "Suivi · Famille"}</h1>
+      <p>{qui === "eleve" ? "Tes résultats et ton bulletin, publiés par tes enseignants." : "Les résultats et le bulletin publiés par les enseignants."}</p>
+      {qui !== "eleve" && <div className="onglets">
+        <button className={mode === "eleve" ? "actif" : ""} onClick={() => setMode("eleve")}>{qui === "parent" ? "Identifiant de mon enfant" : "Élève ou parent : identifiant"}</button>
+        <button className={mode === "parent" ? "actif" : ""} onClick={() => setMode("parent")}>{qui === "parent" ? "Mon adresse e-mail" : "Parent : e-mail"}</button>
+      </div>}
       <form onSubmit={envoyer}>
         {mode === "eleve"
           ? <input placeholder="Identifiant (ex. : alice.durand.5b)" value={identifiant} onChange={e => setIdentifiant(e.target.value)} required autoComplete="username" autoCapitalize="off" />
@@ -159,7 +162,8 @@ function VueEnfant({ jeton, onExpire }: { jeton: string; onExpire: () => void })
             </table>
           </div>
           {!!b.manuelles?.length && <p className="petit"><span className="manuelle-legende">En violet</span> : note saisie par l'enseignant.</p>}
-          {b.appreciation && <p className="appreciation-famille"><strong>Appréciation :</strong> {b.appreciation}</p>}
+          {b.autoEval && <p className="appreciation-famille"><strong>Appréciation de l'élève :</strong> {b.autoEval}</p>}
+          {b.appreciation && <p className="appreciation-famille"><strong>Appréciation du professeur :</strong> {b.appreciation}</p>}
         </div>
       ))}
       {v.tableaux.map((t, i) => (

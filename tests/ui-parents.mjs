@@ -13,6 +13,7 @@ await p.click('button[type=submit]');
 await p.waitForSelector('text=Si cette adresse est connue');
 await p.screenshot({ path: `${OUT}/11-parents-oubli.png` });
 await p.goto('http://127.0.0.1:3300/');
+await p.click('button:has-text("Accueil professeur")');
 await p.fill('input[type=email]', 'admin@ecole.fr');
 await p.fill('input[type=password]', 'secret12');
 await p.click('button[type=submit]');

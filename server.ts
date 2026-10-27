@@ -12,7 +12,7 @@ import { correspond, empreinte, genererMotDePasse } from "./lib/parents.ts";
 import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, normaliserCode, signerJeton } from "./lib/famille.ts";
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
 import { plansDe, remarquesParEleve, type PlanPublie, type RemarqueEleve } from "./lib/planclasse.ts";
-import { colonnesManuelles, dateDansTrimestre, dateValide, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
+import { colonnesManuelles, dateDansTrimestre, dateValide, essaiRetenu, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
 
 // ---------------------------------------------------------------------------
 // Serveur de Suivi, le suivi global des applications Je peux apprendre (hébergement o2switch).
@@ -400,6 +400,17 @@ async function lireApplications(e: Enseignant, frais = false) {
 
 type Resultat = { percent: number; score: string; at: number | null; manuelle?: boolean };
 
+/** Appréciation retenue : celle écrite par l'enseignant dans Suivi, sinon celle de la partie prof du Studio. */
+const appreciationDe = (n: any, studioProf: unknown) => (typeof n?.appreciation === "string" ? n.appreciation : String(studioProf || ""));
+
+/** Pour une colonne : l'autre note que celle retenue (note de l'application si la retenue est saisie à la main, et inversement). */
+function autreNote(essais: Resultat[] | undefined, periode: { debut: string; fin: string }) {
+  const retenu = essaiRetenu(essais, periode);
+  if (!retenu) return null;
+  const autre = essaiRetenu((essais || []).filter(e => !!e.manuelle !== !!retenu.manuelle), periode);
+  return autre ? { note: noteColonne([autre], periode), manuelle: !!autre.manuelle } : null;
+}
+
 // Notes saisies à la main par l'enseignant (résultat perdu ou absent des applications).
 // notesManuelles/{uid}__{refId} : uid, refId, notes { [colonne]: { note (sur 20), at (date retenue), le } }.
 const idNotesManuelles = (uid: string, refId: string) => `${uid}__${refId.replace(/\//g, "_")}`;
@@ -478,6 +489,12 @@ app.get("/api/tableau", exigerEnseignant(), route(async (req, res) => {
     eleves: t.refs.filter(r => t.presents.has(r.id)).sort(parNom).map(r => ({
       id: r.id, classe: r.classe, nom: r.nom, prenom: r.prenom,
       resultats: Object.fromEntries(Object.entries(t.essais.get(r.id) || {}).map(([k, v]) => [k, t.plusRecent(v)])),
+      // Note de l'application et note saisie à la main pour la même colonne : la plus récente compte, l'autre est montrée à côté.
+      autres: Object.fromEntries(Object.entries(t.essais.get(r.id) || {}).flatMap(([k, v]) => {
+        const retenu = t.plusRecent(v);
+        const autres = v.filter(x => !!x.manuelle !== !!retenu.manuelle);
+        return autres.length ? [[k, t.plusRecent(autres)]] : [];
+      })),
     })),
     aVerifier: t.aVerifier,
     masquees: t.masquees,
@@ -553,8 +570,9 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
       id: r.id, nom: r.nom, prenom: r.prenom, calculee,
       notes: Object.fromEntries(colonnes.map(c => [c.cle, noteColonne(essais[c.cle], per[trimestre])])),
       manuelles: colonnesManuelles(essais, colonnes, per[trimestre]),
+      autres: Object.fromEntries(colonnes.flatMap(c => { const a = autreNote(essais[c.cle], per[trimestre]); return a ? [[c.cle, a]] : []; })),
       finale: typeof n.finale === "number" ? n.finale : null, figeeLe: n.figeeLe || null,
-      externes: n.externes || {}, appreciation: n.appreciation || "",
+      externes: n.externes || {}, appreciation: appreciationDe(n, studio.get(r.id)?.prof?.texte), appreciationEcrite: typeof n.appreciation === "string",
       studio: { eleve: studio.get(r.id)?.eleve?.texte || "", prof: studio.get(r.id)?.prof?.texte || "" },
       remarques: remarques.get(r.id) || [],
     };
@@ -564,8 +582,10 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
   const noms = Object.fromEntries(eleves.map(x => [x.id, `${x.nom} ${x.prenom}`.trim()]));
   // L'appréciation que l'élève a écrite lui-même, montrée aussi au prof principal.
   const autoEval = Object.fromEntries(eleves.filter(x => x.studio.eleve).map(x => [x.id, x.studio.eleve]));
-  if (b.classeNom && JSON.stringify([b.calculees || {}, b.noms || {}, b.autoEval || {}]) !== JSON.stringify([copie, noms, autoEval])) {
-    await ref.set({ calculees: copie, noms, autoEval, calculeesLe: new Date().toISOString() }, { merge: true });
+  // Et l'appréciation de la partie prof du Studio, reprise quand l'enseignant n'en a pas écrit dans Suivi.
+  const studioProf = Object.fromEntries(eleves.filter(x => x.studio.prof).map(x => [x.id, x.studio.prof]));
+  if (b.classeNom && JSON.stringify([b.calculees || {}, b.noms || {}, b.autoEval || {}, b.studioProf || {}]) !== JSON.stringify([copie, noms, autoEval, studioProf])) {
+    await ref.set({ calculees: copie, noms, autoEval, studioProf, calculeesLe: new Date().toISOString() }, { merge: true });
   }
   res.json({
     periodes: per, classes, colonnesDispo, trimestre, classe,
@@ -688,7 +708,7 @@ app.get("/api/pp/bulletin", exigerEnseignant(), route(async (req, res) => {
     externes: Array.isArray(b.externes) ? b.externes : [],
     notes: Object.fromEntries(Object.entries<any>({ ...(b.calculees || {}), ...(b.eleves || {}) }).map(([id]) => {
       const n = b.eleves?.[id] || {};
-      return [id, { note: typeof n.finale === "number" ? n.finale : (b.calculees?.[id] ?? null), definitive: typeof n.finale === "number", externes: n.externes || {}, appreciation: n.appreciation || "" }];
+      return [id, { note: typeof n.finale === "number" ? n.finale : (b.calculees?.[id] ?? null), definitive: typeof n.finale === "number", externes: n.externes || {}, appreciation: appreciationDe(n, b.studioProf?.[id]) }];
     })),
   }));
   // Élèves : la liste de l'établissement ; à défaut, ceux qui ont une note.
@@ -980,7 +1000,7 @@ app.post("/api/publier/bulletin", exigerEnseignant(), route(async (req, res) => 
       notes: Object.fromEntries(colonnes.map(c => [c.cle, noteColonne(ess[c.cle], per[trimestre])])),
       manuelles: colonnesManuelles(ess, colonnes, per[trimestre]),
       moyenne: typeof n.finale === "number" ? n.finale : calculee, definitive: typeof n.finale === "number",
-      externes: Object.fromEntries(externes.map(x => [x.id, n.externes?.[x.id] ?? null])), appreciation: String(n.appreciation || ""),
+      externes: Object.fromEntries(externes.map(x => [x.id, n.externes?.[x.id] ?? null])), appreciation: appreciationDe(n, b.studioProf?.[r.id]), autoEval: String(b.autoEval?.[r.id] || ""),
     };
   }
   const publieLe = new Date().toISOString();
@@ -1108,7 +1128,7 @@ app.get("/api/famille", route(async (req, res) => {
   const bulletins = docs.filter(d => d.type === "bulletin").map(d => ({
     enseignant: d.enseignant, classe: d.classeNom, trimestre: d.trimestre, publieLe: d.publieLe,
     colonnes: d.colonnes || [], externes: d.externes || [], notes: d.eleves?.[refId]?.notes || {}, manuelles: d.eleves?.[refId]?.manuelles || [], moyenne: d.eleves?.[refId]?.moyenne ?? null,
-    definitive: !!d.eleves?.[refId]?.definitive, externesNotes: d.eleves?.[refId]?.externes || {}, appreciation: d.eleves?.[refId]?.appreciation || "",
+    definitive: !!d.eleves?.[refId]?.definitive, externesNotes: d.eleves?.[refId]?.externes || {}, appreciation: d.eleves?.[refId]?.appreciation || "", autoEval: d.eleves?.[refId]?.autoEval || "",
   })).sort((a, b) => String(b.trimestre).localeCompare(String(a.trimestre)) || String(a.enseignant).localeCompare(String(b.enseignant), "fr"));
   res.json({ eleve: nom, tableaux, bulletins });
 }));
