@@ -12,7 +12,7 @@ import { correspond, empreinte, genererMotDePasse } from "./lib/parents.ts";
 import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, normaliserCode, signerJeton } from "./lib/famille.ts";
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
 import { plansDe, remarquesParEleve, type PlanPublie, type RemarqueEleve } from "./lib/planclasse.ts";
-import { dateValide, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
+import { colonnesManuelles, dateDansTrimestre, dateValide, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
 
 // ---------------------------------------------------------------------------
 // Serveur de Suivi, le suivi global des applications Je peux apprendre (hébergement o2switch).
@@ -398,7 +398,15 @@ async function lireApplications(e: Enseignant, frais = false) {
   return lus;
 }
 
-type Resultat = { percent: number; score: string; at: number | null };
+type Resultat = { percent: number; score: string; at: number | null; manuelle?: boolean };
+
+// Notes saisies à la main par l'enseignant (résultat perdu ou absent des applications).
+// notesManuelles/{uid}__{refId} : uid, refId, notes { [colonne]: { note (sur 20), at (date retenue), le } }.
+const idNotesManuelles = (uid: string, refId: string) => `${uid}__${refId.replace(/\//g, "_")}`;
+async function notesManuelles(uid: string) {
+  const snap = await db.collection("notesManuelles").where("uid", "==", uid).get();
+  return snap.docs.map(d => d.data()).filter(d => d.refId && d.notes && typeof d.notes === "object");
+}
 
 /** Résultats de l'enseignant rangés par élève de référence (le plus récent essai pour chaque exercice). */
 async function calculerTableau(e: Enseignant, frais = false) {
@@ -422,6 +430,16 @@ async function calculerTableau(e: Enseignant, frais = false) {
       (parExo[`${a.id}:${r.exerciseId}`] ||= []).push({ percent: Number(r.percent) || 0, score: String(r.score || ""), at: r.completedAt ?? null });
       essais.set(refId, parExo);
     }
+  }
+  // Les notes saisies à la main comptent comme un essai de plus, à la date retenue.
+  for (const m of await notesManuelles(e.uid)) {
+    if (!gardes.has(m.refId)) continue;
+    const parExo = essais.get(m.refId) || {};
+    for (const [cle, n] of Object.entries<any>(m.notes)) {
+      if (typeof n?.note !== "number") continue;
+      (parExo[cle] ||= []).push({ percent: n.note * 5, score: `${String(n.note).replace(".", ",")}/20`, at: typeof n.at === "number" ? n.at : null, manuelle: true });
+    }
+    essais.set(m.refId, parExo);
   }
   const plusRecent = (liste: Resultat[]) => liste.reduce((m, x) => ((x.at || 0) >= (m.at || 0) ? x : m));
   const presents = new Set(resultat.map(r => r.refId).filter((id): id is string => !!id && gardes.has(id)));
@@ -534,6 +552,7 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
     return {
       id: r.id, nom: r.nom, prenom: r.prenom, calculee,
       notes: Object.fromEntries(colonnes.map(c => [c.cle, noteColonne(essais[c.cle], per[trimestre])])),
+      manuelles: colonnesManuelles(essais, colonnes, per[trimestre]),
       finale: typeof n.finale === "number" ? n.finale : null, figeeLe: n.figeeLe || null,
       externes: n.externes || {}, appreciation: n.appreciation || "",
       studio: { eleve: studio.get(r.id)?.eleve?.texte || "", prof: studio.get(r.id)?.prof?.texte || "" },
@@ -621,6 +640,28 @@ app.post("/api/bulletin/figer", exigerEnseignant(), route(async (req, res) => {
   }
   await ref.set({ eleves: maj, majLe: le }, { merge: true });
   res.json({ ok: true, figees: Object.keys(maj).length });
+}));
+
+// Note saisie à la main dans une colonne (tableau ou bulletin) : note sur 20, ou vide pour l'effacer.
+// Depuis le bulletin, la note est datée dans le trimestre affiché, pour y compter même saisie après coup.
+app.post("/api/notes-manuelles", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const refId = texteCourt(req.body?.refId, 200);
+  const cle = texteCourt(req.body?.cle, 300);
+  const n = lireNote(req.body?.note);
+  if (n === undefined) throw httpError(400, "La note doit être entre 0 et 20.");
+  const t = await calculerTableau(e);
+  if (!t.refs.some(r => r.id === refId)) throw httpError(404, "Élève introuvable.");
+  if (!t.applications.some(a => a.exercices.some(x => `${a.id}:${x.id}` === cle))) throw httpError(404, "Colonne introuvable.");
+  let at = Date.now();
+  if (req.body?.trimestre !== undefined) {
+    if (!estTrimestre(req.body.trimestre)) throw httpError(400, "Trimestre incorrect.");
+    at = dateDansTrimestre((await periodes())[req.body.trimestre as Trimestre]);
+  }
+  await db.doc(`notesManuelles/${idNotesManuelles(e.uid, refId)}`).set({
+    uid: e.uid, refId, notes: { [cle]: n === null ? FieldValue.delete() : { note: n, at, le: new Date().toISOString() } },
+  }, { merge: true });
+  res.json({ ok: true });
 }));
 
 // --- Prof principal ---------------------------------------------------------------------------
@@ -902,12 +943,12 @@ app.post("/api/publier/tableau", exigerEnseignant(), route(async (req, res) => {
   if (!eleves.length) throw httpError(404, "Aucun élève suivi dans cette classe.");
   const colonnes = t.applications.flatMap(a => a.exercices.map(x => ({ cle: `${a.id}:${x.id}`, app: a.nom, titre: x.titre })))
     .filter(c => !t.masquees.includes(c.cle) && eleves.some(r => t.essais.get(r.id)?.[c.cle]?.length));
-  const lignes: Record<string, Record<string, { percent: number; score: string }>> = {};
+  const lignes: Record<string, Record<string, { percent: number; score: string; manuelle?: boolean }>> = {};
   for (const r of eleves) {
     const ess = t.essais.get(r.id) || {};
     lignes[r.id] = Object.fromEntries(colonnes.filter(c => ess[c.cle]?.length).map(c => {
       const x = t.plusRecent(ess[c.cle]);
-      return [c.cle, { percent: Math.round(x.percent), score: x.score }];
+      return [c.cle, { percent: Math.round(x.percent), score: x.score, ...(x.manuelle ? { manuelle: true } : {}) }];
     }));
   }
   const publieLe = new Date().toISOString();
@@ -937,6 +978,7 @@ app.post("/api/publier/bulletin", exigerEnseignant(), route(async (req, res) => 
     const calculee = noteSur20(ess, colonnes, per[trimestre]);
     eleves[r.id] = {
       notes: Object.fromEntries(colonnes.map(c => [c.cle, noteColonne(ess[c.cle], per[trimestre])])),
+      manuelles: colonnesManuelles(ess, colonnes, per[trimestre]),
       moyenne: typeof n.finale === "number" ? n.finale : calculee, definitive: typeof n.finale === "number",
       externes: Object.fromEntries(externes.map(x => [x.id, n.externes?.[x.id] ?? null])), appreciation: String(n.appreciation || ""),
     };
@@ -1065,7 +1107,7 @@ app.get("/api/famille", route(async (req, res) => {
   })).sort((a, b) => String(a.enseignant).localeCompare(String(b.enseignant), "fr"));
   const bulletins = docs.filter(d => d.type === "bulletin").map(d => ({
     enseignant: d.enseignant, classe: d.classeNom, trimestre: d.trimestre, publieLe: d.publieLe,
-    colonnes: d.colonnes || [], externes: d.externes || [], notes: d.eleves?.[refId]?.notes || {}, moyenne: d.eleves?.[refId]?.moyenne ?? null,
+    colonnes: d.colonnes || [], externes: d.externes || [], notes: d.eleves?.[refId]?.notes || {}, manuelles: d.eleves?.[refId]?.manuelles || [], moyenne: d.eleves?.[refId]?.moyenne ?? null,
     definitive: !!d.eleves?.[refId]?.definitive, externesNotes: d.eleves?.[refId]?.externes || {}, appreciation: d.eleves?.[refId]?.appreciation || "",
   })).sort((a, b) => String(b.trimestre).localeCompare(String(a.trimestre)) || String(a.enseignant).localeCompare(String(b.enseignant), "fr"));
   res.json({ eleve: nom, tableaux, bulletins });

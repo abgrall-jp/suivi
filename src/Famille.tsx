@@ -10,10 +10,10 @@ type Enfant = { jeton: string; prenom: string; nom: string };
 type Colonne = { cle: string; app?: string; titre: string; coef?: number };
 type VueFamille = {
   eleve: { nom: string; prenom: string; classe: string } | null;
-  tableaux: { enseignant: string; classe: string; publieLe: string; colonnes: Colonne[]; resultats: Record<string, { percent: number; score: string }> }[];
+  tableaux: { enseignant: string; classe: string; publieLe: string; colonnes: Colonne[]; resultats: Record<string, { percent: number; score: string; manuelle?: boolean }> }[];
   bulletins: {
     enseignant: string; classe: string; trimestre: string; publieLe: string; colonnes: Colonne[]; externes: { id: string; titre: string }[];
-    notes: Record<string, number | null>; moyenne: number | null; definitive: boolean; externesNotes: Record<string, number | null>; appreciation: string;
+    notes: Record<string, number | null>; manuelles?: string[]; moyenne: number | null; definitive: boolean; externesNotes: Record<string, number | null>; appreciation: string;
   }[];
 };
 
@@ -152,12 +152,13 @@ function VueEnfant({ jeton, onExpire }: { jeton: string; onExpire: () => void })
                 {b.externes.map(x => <th key={x.id}>{x.titre}</th>)}
               </tr></thead>
               <tbody><tr>
-                {b.colonnes.map(c => <td key={c.cle}>{note(b.notes[c.cle])}</td>)}
+                {b.colonnes.map(c => <td key={c.cle} className={b.manuelles?.includes(c.cle) ? "manuelle" : ""} title={b.manuelles?.includes(c.cle) ? "Note saisie par l'enseignant" : undefined}>{note(b.notes[c.cle])}</td>)}
                 <td><strong>{note(b.moyenne)}</strong></td>
                 {b.externes.map(x => <td key={x.id}>{note(b.externesNotes[x.id])}</td>)}
               </tr></tbody>
             </table>
           </div>
+          {!!b.manuelles?.length && <p className="petit"><span className="manuelle-legende">En violet</span> : note saisie par l'enseignant.</p>}
           {b.appreciation && <p className="appreciation-famille"><strong>Appréciation :</strong> {b.appreciation}</p>}
         </div>
       ))}
@@ -171,7 +172,7 @@ function VueEnfant({ jeton, onExpire }: { jeton: string; onExpire: () => void })
                 <thead><tr>{t.colonnes.map(c => <th key={c.cle} className="exo" title={`${c.app} : ${c.titre}`}><EnteteColonne titre={c.titre} /></th>)}</tr></thead>
                 <tbody><tr>{t.colonnes.map(c => {
                   const r = t.resultats[c.cle];
-                  return <td key={c.cle} className={r ? couleur(r.percent) : "vide"}>{r ? <>{r.score && <span className="note">{r.score.replace(/\s*\/\s*/, "/")}</span>} {r.percent} %</> : ""}</td>;
+                  return <td key={c.cle} className={`${r ? couleur(r.percent) : "vide"}${r?.manuelle ? " manuelle" : ""}`} title={r?.manuelle ? "Note saisie par l'enseignant" : undefined}>{r ? <>{r.score && <span className="note">{r.score.replace(/\s*\/\s*/, "/")}</span>} {r.percent} %</> : ""}</td>;
                 })}</tr></tbody>
               </table>
             </div>

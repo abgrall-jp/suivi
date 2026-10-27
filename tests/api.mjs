@@ -159,6 +159,30 @@ let buc = (await jean('/api/bulletin?trimestre=T1&classe=5B')).data;
 t('coefficient 3 sur Mémoriser : Alice (50×3 + 90) / 4 = 12 / 20', buc.eleves.find(e => e.id === '5b_durand_alice')?.calculee === 12 && buc.colonnes.find(c => c.cle === 'memoriser:deck_verbes')?.coef === 3, buc.colonnes);
 t('coefficient incorrect : ramené à 1', (await jean('/api/bulletin/colonnes', { trimestre: 'T1', classe: '5B', colonnes: bu.colonnesDispo.map(c => ({ ...c, coef: 'abc' })), externes: [{ id: 'oral', titre: 'Oral' }] })).status === 200
   && (await jean('/api/bulletin?trimestre=T1&classe=5B')).data.colonnes.every(c => c.coef === 1));
+console.log('Notes saisies à la main');
+{
+  const b0 = (await jean('/api/bulletin?trimestre=T1&classe=5B')).data;
+  const bob0 = b0.eleves.find(e => e.id === '5b_leroy_bob');
+  const vide = { cle: 'memoriser:deck_verbes' }; // Bob y a 0 (résultat perdu, par exemple)
+  t('note hors barème : refusée', (await jean('/api/notes-manuelles', { refId: '5b_leroy_bob', cle: vide.cle, note: '21' })).status === 400);
+  t('colonne inconnue : refusée', (await jean('/api/notes-manuelles', { refId: '5b_leroy_bob', cle: 'x:y', note: 12 })).status === 404);
+  t('élève inconnu : refusé', (await jean('/api/notes-manuelles', { refId: 'personne', cle: vide.cle, note: 12 })).status === 404);
+  t('note saisie depuis le bulletin, à la place du 0', (await jean('/api/notes-manuelles', { refId: '5b_leroy_bob', cle: vide.cle, note: '16,5', trimestre: 'T1' })).status === 200);
+  const bob1 = (await jean('/api/bulletin?trimestre=T1&classe=5B')).data.eleves.find(e => e.id === '5b_leroy_bob');
+  t('bulletin : la note saisie est dans la colonne et marquée', bob1.notes[vide.cle] === 16.5 && bob1.manuelles.includes(vide.cle) && bob1.manuelles.length === 1, bob1);
+  t('bulletin : la moyenne en tient compte', bob1.calculee !== bob0.calculee && bob1.calculee > bob0.calculee, [bob0.calculee, bob1.calculee]);
+  const r = (await jean('/api/tableau')).data.eleves.find(e => e.id === '5b_leroy_bob').resultats[vide.cle];
+  t('tableau : la note saisie apparaît, marquée', r?.manuelle === true && r.percent === 82.5 && r.score === '16,5/20', r);
+  await jean('/api/bulletin/colonnes', { trimestre: 'T2', classe: '5B', colonnes: b0.colonnes });
+  t('2e trimestre : la note saisie pour le 1er n’y compte pas', (await jean('/api/bulletin?trimestre=T2&classe=5B')).data.eleves.find(e => e.id === '5b_leroy_bob').notes[vide.cle] === null, 'T2');
+  t('note saisie effacée', (await jean('/api/notes-manuelles', { refId: '5b_leroy_bob', cle: vide.cle, note: '' })).status === 200);
+  const bob2 = (await jean('/api/bulletin?trimestre=T1&classe=5B')).data.eleves.find(e => e.id === '5b_leroy_bob');
+  t('effacée : retour aux notes des applications', bob2.notes[vide.cle] === 0 && bob2.manuelles.length === 0 && bob2.calculee === bob0.calculee, bob2);
+  t('Chloé (aucun résultat) : note saisie, elle a une moyenne', (await jean('/api/notes-manuelles', { refId: '5b_petit_chloe', cle: vide.cle, note: 14, trimestre: 'T1' })).status === 200
+    && (await jean('/api/bulletin?trimestre=T1&classe=5B')).data.eleves.find(e => e.id === '5b_petit_chloe').calculee === 14);
+  await jean('/api/notes-manuelles', { refId: '5b_petit_chloe', cle: vide.cle, note: null });
+  t('Chloé : note effacée', (await jean('/api/bulletin?trimestre=T1&classe=5B')).data.eleves.find(e => e.id === '5b_petit_chloe').calculee === null);
+}
 await studio.collection('appreciations').doc('premium_bob').set({ teacherId: uidJean, studentName: 'LEROY Bob', className: '5B', period: 'Trimestre 1', text: 'Bob progresse.', createdAt: '2026-10-20T10:00:00.000Z' });
 buc = (await jean('/api/bulletin?trimestre=T1&classe=5B')).data;
 t('appréciation d’une séance de classe du Studio (period, createdAt) reprise pour Bob', buc.eleves.find(e => e.id === '5b_leroy_bob')?.studio?.prof === 'Bob progresse.', buc.eleves.find(e => e.id === '5b_leroy_bob'));
@@ -228,6 +252,12 @@ t('Alice voit son nom', vue.eleve?.prenom === 'Alice');
 t('tableau : seulement la colonne publiée et son propre résultat', vue.tableaux.length === 1 && vue.tableaux[0].colonnes.length === 1 && vue.tableaux[0].resultats['textetrous:ex1']?.percent === 90, vue.tableaux);
 t('bulletin : sa note définitive et son appréciation', vue.bulletins[0]?.moyenne === 15.5 && vue.bulletins[0].definitive && vue.bulletins[0].appreciation === 'Très bon trimestre.' && vue.bulletins[0].externesNotes.oral === 12, vue.bulletins);
 t('rien sur les camarades', !JSON.stringify(vue).includes('Leroy') && !JSON.stringify(vue).includes('LEROY'));
+await jean('/api/notes-manuelles', { refId: '5b_durand_alice', cle: 'textetrous:ex1', note: 17 });
+await jean('/api/publier/tableau', { classe: '5B' });
+const vueM = (await famille('/api/famille', cx.data.enfants[0].jeton)).data;
+t('famille : la note saisie par l’enseignant est marquée', vueM.tableaux[0].resultats['textetrous:ex1']?.manuelle === true && vueM.tableaux[0].resultats['textetrous:ex1'].percent === 85, vueM.tableaux);
+await jean('/api/notes-manuelles', { refId: '5b_durand_alice', cle: 'textetrous:ex1', note: null });
+await jean('/api/publier/tableau', { classe: '5B' });
 const nv = (await jean('/api/famille/codes', { classe: '5B', refIds: ['5b_durand_alice'] })).data.codes[0];
 t('mot de passe oublié : nouveau départ personnel, même identifiant', nv.identifiant === 'alice.durand.5b' && nv.code !== 'Classe-5B');
 t('l’ancien mot de passe ne marche plus, le nouveau départ oui', (await famille('/api/famille/connexion', null, { identifiant: 'alice.durand.5b', motDePasse: 'AliceSecret1' })).status === 401

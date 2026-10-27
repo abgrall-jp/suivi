@@ -5,7 +5,7 @@
 export type Trimestre = "T1" | "T2" | "T3";
 export const TRIMESTRES: Trimestre[] = ["T1", "T2", "T3"];
 export type Periodes = Record<Trimestre, { debut: string; fin: string }>; // dates AAAA-MM-JJ, fin incluse
-export type Essai = { percent: number; at: number | null };
+export type Essai = { percent: number; at: number | null; manuelle?: boolean }; // manuelle : note saisie par l'enseignant
 
 /** Trimestres de l'année scolaire en cours (septembre à juillet) : 1er sept.–30 nov., 1er déc.–fin février, 1er mars–14 juillet. */
 export function periodesParDefaut(maintenant = new Date()): Periodes {
@@ -34,13 +34,20 @@ export function lireCoef(v: unknown): number {
   return Number.isFinite(n) && n > 0 ? Math.min(10, Math.max(0.5, Math.round(n * 2) / 2)) : 1;
 }
 
-/** Note sur 20 d'une colonne : le dernier essai fait pendant le trimestre (un essai sans date compte toujours). */
-export function noteColonne(essais: Essai[] | undefined, periode: { debut: string; fin: string }): number | null {
+/** Essai retenu pour une colonne : le dernier fait pendant le trimestre (un essai sans date compte toujours). */
+export function essaiRetenu(essais: Essai[] | undefined, periode: { debut: string; fin: string }): Essai | null {
   const { debut, fin } = bornes(periode);
   const dansPeriode = (essais || []).filter(e => e.at === null || (e.at >= debut && e.at <= fin));
   if (!dansPeriode.length) return null;
-  const dernier = dansPeriode.reduce((m, x) => ((x.at ?? 0) >= (m.at ?? 0) ? x : m));
-  return Math.round(Math.max(0, Math.min(100, dernier.percent)) / 5 * 10) / 10;
+  return dansPeriode.reduce((m, x) => ((x.at ?? 0) >= (m.at ?? 0) ? x : m));
+}
+
+const sur20 = (percent: number) => Math.round(Math.max(0, Math.min(100, percent)) / 5 * 10) / 10;
+
+/** Note sur 20 d'une colonne pour le trimestre. */
+export function noteColonne(essais: Essai[] | undefined, periode: { debut: string; fin: string }): number | null {
+  const e = essaiRetenu(essais, periode);
+  return e ? sur20(e.percent) : null;
 }
 
 /**
@@ -48,18 +55,29 @@ export function noteColonne(essais: Essai[] | undefined, periode: { debut: strin
  * Aucune colonne avec résultat : pas de note.
  */
 export function noteSur20(essais: Record<string, Essai[]>, colonnes: (string | ColonneNote)[], periode: { debut: string; fin: string }): number | null {
-  const { debut, fin } = bornes(periode);
   let somme = 0, poids = 0;
   for (const c of colonnes) {
     const cle = typeof c === "string" ? c : c.cle;
     const coef = typeof c === "string" ? 1 : lireCoef(c.coef);
-    const dansPeriode = (essais[cle] || []).filter(e => e.at === null || (e.at >= debut && e.at <= fin));
-    if (!dansPeriode.length) continue;
-    const dernier = dansPeriode.reduce((m, x) => ((x.at ?? 0) >= (m.at ?? 0) ? x : m));
-    somme += Math.max(0, Math.min(100, dernier.percent)) * coef; poids += coef;
+    const e = essaiRetenu(essais[cle], periode);
+    if (!e) continue;
+    somme += Math.max(0, Math.min(100, e.percent)) * coef; poids += coef;
   }
   if (!poids) return null;
   return Math.round((somme / poids / 5) * 10) / 10;
+}
+
+/** Colonnes dont la note retenue pour le trimestre a été saisie à la main. */
+export function colonnesManuelles(essais: Record<string, Essai[]>, colonnes: { cle: string }[], periode: { debut: string; fin: string }): string[] {
+  return colonnes.filter(c => essaiRetenu(essais[c.cle], periode)?.manuelle).map(c => c.cle);
+}
+
+/** Date d'une note saisie pour un trimestre : maintenant si on est dans le trimestre, sinon le dernier (ou le premier) jour. */
+export function dateDansTrimestre(periode: { debut: string; fin: string }, maintenant = Date.now()): number {
+  const { debut, fin } = bornes(periode);
+  if (maintenant > fin) return fin - 12 * 3600e3;
+  if (maintenant < debut) return debut + 14 * 3600e3;
+  return maintenant;
 }
 
 /** Note saisie à la main (sur 20, virgule acceptée) : nombre arrondi au dixième, null pour effacer, undefined si incorrecte. */

@@ -264,6 +264,7 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
   const [tri, setTri] = useState<Tri>(null);
   const [voirMasquees, setVoirMasquees] = useState(false);
   const defile = useRef<HTMLDivElement>(null);
+  const [saisie, setSaisie] = useState<string | null>(null); // case en cours de saisie : « refId|colonne »
 
   const charger = useCallback(async (frais = false) => {
     try { const d = await api<Tableau>(`/api/tableau${frais ? "?frais=1" : ""}`); setT(d); onAVerifier(d.aVerifier); setMsg(""); } catch (e: any) { setMsg(e.message); }
@@ -275,6 +276,12 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
     const id = setInterval(() => { if (document.visibilityState === "visible") charger(); }, 30000);
     return () => clearInterval(id);
   }, [charger]);
+
+  // Note saisie à la main (résultat perdu ou absent) : sur 20, vide pour l'effacer.
+  const saisirNote = async (refId: string, cle: string, note: string) => {
+    setSaisie(null);
+    try { await api("/api/notes-manuelles", { refId, cle, note }); await charger(); } catch (e: any) { setMsg(e.message); }
+  };
 
   const classes = useMemo(() => Array.from(new Set((t?.eleves || []).map(e => e.classe))).sort((a, b) => a.localeCompare(b, "fr")), [t]);
   const filtres = (t?.eleves || []).filter(e => !classe || e.classe === classe);
@@ -352,7 +359,8 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
           <button className="lien" onClick={() => allerA("correspondances")}>Vérifier</button></p>
       )}
       {t?.provisoire && <p className="petit">La liste de l'établissement n'est pas encore importée : les élèves sont repris des applications.</p>}
-      {!!apps.length && <p className="petit">Cliquez sur le titre d'une colonne pour classer les élèves selon cette note (cliquez encore pour inverser). La croix ✕ masque une colonne inutile.</p>}
+      {!!apps.length && <p className="petit">Cliquez sur le titre d'une colonne pour classer les élèves selon cette note (cliquez encore pour inverser). La croix ✕ masque une colonne inutile.
+        Une note perdue ou absente ? Cliquez sur la case pour la saisir sur 20 : elle apparaît <span className="manuelle-legende">en violet</span>, ici et dans le bulletin.</p>}
       {!apps.length ? <p>{cherche ? "Aucune colonne ne correspond à cette recherche." : "Pas encore de résultat dans les applications reliées."}</p> : (
         <div className="defile" ref={defile}>
           <table className="tableau">
@@ -374,8 +382,12 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
                   <td className="fixe"><span className="nom">{e.nom} {e.prenom}</span><span className="classe">{e.classe}
                     <button className="lien retirer" title="Ne plus suivre cet élève" onClick={() => retirer(e.id, `${e.nom} ${e.prenom}`.trim())}>retirer</button></span></td>
                   {apps.flatMap(a => a.exercices.map(x => {
-                    const r = e.resultats[`${a.id}:${x.id}`];
-                    return <td key={`${a.id}:${x.id}`} className={r ? couleur(r.percent) : "vide"} title={r ? `${r.score} · ${dateCourte(r.at)}` : ""}>{r ? <>{r.score && <span className="note">{r.score.replace(/\s*\/\s*/, "/")}</span>}{Math.round(r.percent)} %</> : ""}</td>;
+                    const cle = `${a.id}:${x.id}`;
+                    const r = e.resultats[cle];
+                    if (saisie === `${e.id}|${cle}`) return <td key={cle} className="saisie"><CaseNote initiale={r?.manuelle ? String(r.percent / 5).replace(".", ",") : ""} onValider={v => saisirNote(e.id, cle, v)} onAnnuler={() => setSaisie(null)} /></td>;
+                    return <td key={cle} className={`${r ? couleur(r.percent) : "vide"}${r?.manuelle ? " manuelle" : ""} modifiable`} onClick={() => setSaisie(`${e.id}|${cle}`)}
+                      title={r ? `${r.manuelle ? "Saisie à la main" : r.score} · ${dateCourte(r.at)}\nCliquer pour corriger` : "Cliquer pour saisir une note sur 20"}>
+                      {r ? <>{r.score && <span className="note">{r.score.replace(/\s*\/\s*/, "/")}</span>}{Math.round(r.percent)} %</> : ""}</td>;
                   }))}
                 </tr>
               ))}
@@ -385,6 +397,15 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
       )}
     </section>
   );
+}
+
+/** Case du tableau en saisie : Entrée ou clic ailleurs enregistre, Échap annule. */
+function CaseNote({ initiale, onValider, onAnnuler }: { initiale: string; onValider: (v: string) => void; onAnnuler: () => void }) {
+  const [v, setV] = useState(initiale);
+  const fini = useRef(false);
+  const valider = () => { if (fini.current) return; fini.current = true; v.trim() === initiale ? onAnnuler() : onValider(v.trim()); };
+  return <input className="note" autoFocus inputMode="decimal" placeholder="/20" value={v} onChange={ev => setV(ev.target.value)} onBlur={valider}
+    onKeyDown={ev => { if (ev.key === "Enter") valider(); if (ev.key === "Escape") { fini.current = true; onAnnuler(); } }} />;
 }
 
 const cleCl = (s: string) => sansAccent(s).replace(/[^a-z0-9]/g, "").replace(/^(\d+)(ieme|eme|em|e)?/, "$1");

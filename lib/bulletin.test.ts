@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { lireNote, moyenne, noteSur20, periodesParDefaut } from "./bulletin.ts";
+import { colonnesManuelles, dateDansTrimestre, lireNote, moyenne, noteSur20, periodesParDefaut } from "./bulletin.ts";
 
 test("trimestres de l'année scolaire", () => {
   assert.deepEqual(periodesParDefaut(new Date("2026-10-24")), {
@@ -37,4 +37,15 @@ test("saisie d'une note", () => {
   assert.equal(lireNote("abc"), undefined);
   assert.equal(moyenne([12, null, 15]), 13.5);
   assert.equal(moyenne([]), null);
+});
+
+test("note saisie à la main : comptée dans la moyenne et repérée", () => {
+  const T1 = { debut: "2026-09-01", fin: "2026-11-30" };
+  const essais = { "a:1": [{ percent: 50, at: Date.parse("2026-10-01") }], "a:2": [{ percent: 80, at: Date.parse("2026-10-02"), manuelle: true }] };
+  assert.equal(noteSur20(essais, ["a:1", "a:2"], T1), 13);
+  assert.deepEqual(colonnesManuelles(essais, [{ cle: "a:1" }, { cle: "a:2" }], T1), ["a:2"]);
+  // Saisie après la fin du trimestre : datée du dernier jour, donc comptée dans ce trimestre.
+  const d = dateDansTrimestre(T1, Date.parse("2027-01-15"));
+  assert.equal(noteSur20({ x: [{ percent: 100, at: d }] }, ["x"], T1), 20);
+  assert.equal(dateDansTrimestre(T1, Date.parse("2026-10-10")), Date.parse("2026-10-10"));
 });

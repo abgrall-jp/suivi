@@ -8,7 +8,7 @@ type Periodes = Record<Trimestre, { debut: string; fin: string }>;
 type Colonne = { cle: string; app: string; titre: string; coef?: number };
 type Externe = { id: string; titre: string };
 type LigneBulletin = {
-  id: string; nom: string; prenom: string; calculee: number | null; notes?: Record<string, number | null>; finale: number | null; figeeLe: string | null;
+  id: string; nom: string; prenom: string; calculee: number | null; notes?: Record<string, number | null>; manuelles?: string[]; finale: number | null; figeeLe: string | null;
   externes: Record<string, number | null>; appreciation: string; studio?: { eleve: string; prof: string };
   remarques?: { date: string; seance: string; texte: string }[];
 };
@@ -70,6 +70,13 @@ export function VueBulletin() {
     try { await api("/api/bulletin/eleve", { trimestre, classe, refId, ...champ }); await charger(); } catch (e: any) { setMsg(e.message); }
   };
 
+  // Note d'une colonne saisie à la main (perdue ou absente des applications) ; vide efface la note saisie.
+  const saisirNote = async (refId: string, cle: string, v: string, manuelle: boolean) => {
+    if (!v.trim() && !manuelle) return; // effacer une note des applications : rien à faire
+    setMsg("");
+    try { await api("/api/notes-manuelles", { refId, cle, note: v, trimestre }); await charger(); } catch (e: any) { setMsg(e.message); }
+  };
+
   if (!b || !trimestre) return msg ? <p className="erreur">{msg}</p> : <p>Chargement…</p>;
   const externes = b.externes || [];
   const colonnes = b.colonnes || [];
@@ -107,7 +114,7 @@ export function VueBulletin() {
       {pret && (
         <>
           {!b.studioRelie && <p className="petit">Pour voir ici les appréciations écrites dans le Studio d'Appréciations, reliez-le dans « Mes applications ».</p>}
-          <p className="petit">Chaque colonne montre la note sur 20 du dernier essai du trimestre ; la moyenne calculée en tient compte avec les coefficients. Écrivez une note définitive, ou cliquez sur « Figer les notes » : elle ne sera plus mise à jour par le logiciel, mais vous pourrez toujours la changer.</p>
+          <p className="petit">Chaque colonne montre la note sur 20 du dernier essai du trimestre ; la moyenne calculée en tient compte avec les coefficients. Une note perdue ou absente ? Écrivez-la dans la case : elle apparaît <span className="manuelle-legende">en violet</span> et compte dans la moyenne (effacez-la pour revenir à la note des applications). Écrivez une note définitive, ou cliquez sur « Figer les notes » : elle ne sera plus mise à jour par le logiciel, mais vous pourrez toujours la changer.</p>
           <div className="defile">
             <table className="tableau bulletin">
               <thead><tr>
@@ -125,9 +132,14 @@ export function VueBulletin() {
                 {b.eleves!.map(e => (
                   <tr key={e.id}>
                     <td className="fixe"><span className="nom">{e.nom} {e.prenom}</span></td>
-                    {colonnes.map(c => <td key={c.cle}>{note(e.notes?.[c.cle]) || "–"}</td>)}
+                    {colonnes.map(c => {
+                      const manuelle = !!e.manuelles?.includes(c.cle);
+                      return <td key={c.cle} className={manuelle ? "manuelle" : ""} title={manuelle ? "Note saisie à la main" : "Note des applications (saisir une note pour la remplacer)"}>
+                        <ChampNote valeur={e.notes?.[c.cle] ?? null} indication="–" onValider={v => saisirNote(e.id, c.cle, v, manuelle)} />
+                      </td>;
+                    })}
                     <td><strong>{note(e.calculee) || "–"}</strong></td>
-                    <td className={e.finale !== null ? "figee" : ""}>
+                    <td className={`definitive${e.finale !== null ? " figee" : ""}`}>
                       <ChampNote valeur={e.finale} indication={note(e.calculee)} onValider={v => enregistrer(e.id, { finale: v })} />
                       {e.finale !== null && <button className="lien" title="Revenir à la note calculée" onClick={() => enregistrer(e.id, { finale: null })}>↺</button>}
                     </td>
