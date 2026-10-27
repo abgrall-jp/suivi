@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cleClasse, comparer, decider, lireListe, type EleveRef } from "./correspondance.ts";
+import { classeEstUnNom, cleClasse, comparer, decider, lireListe, type EleveRef } from "./correspondance.ts";
 
 const refs: EleveRef[] = [
   { id: "lea", classe: "5A", nom: "MARTIN", prenom: "Léa" },
@@ -56,4 +56,12 @@ test("e-mails des parents, facultatifs", () => {
   assert.equal(eleves[0].email2, "maman@mail.fr");
   assert.equal(eleves[1].email1, "");
   assert.deepEqual(erreurs, ["Ligne 3 : adresse e-mail incorrecte (pas-un-mail)."]);
+});
+
+test("classe qui n'est que le nom de l'élève", () => {
+  assert.equal(classeEstUnNom("LE LOCH", "Marie LE LOCH"), true);
+  assert.equal(classeEstUnNom("BATAILLE PENALVA", "Léa Bataille Penalva"), true);
+  assert.equal(classeEstUnNom("5e B", "Alice Durand"), false);
+  assert.equal(classeEstUnNom("Élèves", "Alice Durand"), false);
+  assert.equal(classeEstUnNom("", "Alice Durand"), false);
 });

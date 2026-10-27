@@ -3,11 +3,18 @@ import { auth } from "./firebase.ts";
 /** Appel du serveur de Suivi avec le jeton de l'enseignant connecté. */
 export async function api<T = any>(chemin: string, body?: unknown): Promise<T> {
   const jeton = await auth.currentUser?.getIdToken();
-  const r = await fetch(chemin, {
+  const envoyer = () => fetch(chemin, {
     method: body === undefined ? "GET" : "POST",
     headers: { ...(jeton ? { Authorization: `Bearer ${jeton}` } : {}), ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  // Connexion coupée (réseau du téléphone, serveur qui redémarre) : une lecture est retentée une fois après 2 secondes.
+  let r: Response;
+  try { r = await envoyer(); } catch {
+    if (body !== undefined) throw new Error("Le serveur n'a pas répondu (connexion coupée). Vérifiez la connexion et réessayez.");
+    await new Promise(ok => setTimeout(ok, 2000));
+    try { r = await envoyer(); } catch { throw new Error("Le serveur n'a pas répondu (connexion coupée). Vérifiez la connexion, puis rechargez la page."); }
+  }
   let data: any = {};
   try { data = await r.json(); } catch {}
   if (!r.ok) throw new Error(data?.error || `Erreur ${r.status}`);

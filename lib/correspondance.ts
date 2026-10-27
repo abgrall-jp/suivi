@@ -94,3 +94,11 @@ export function lireListe(texte: string): { eleves: EleveImporte[]; erreurs: str
   });
   return { eleves: Array.from(eleves.values()), erreurs };
 }
+
+/** « Classe » qui n'est que le nom de l'élève (tous ses mots sont dans son nom, sans chiffre) : pas une vraie classe. */
+export function classeEstUnNom(classe: string, nom: string) {
+  const c = normaliser(classe);
+  if (!c || /\d/.test(c)) return false;
+  const mots = new Set(normaliser(nom).split(" "));
+  return c.split(" ").every(m => mots.has(m));
+}

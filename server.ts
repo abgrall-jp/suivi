@@ -6,7 +6,7 @@ import nodemailer from "nodemailer";
 import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
-import { cleClasse, decider, lireListe, normaliser, type EleveRef } from "./lib/correspondance.ts";
+import { classeEstUnNom, cleClasse, decider, lireListe, normaliser, type EleveRef } from "./lib/correspondance.ts";
 import { APPLICATIONS, type Application } from "./lib/applications.ts";
 import { correspond, empreinte, genererMotDePasse } from "./lib/parents.ts";
 import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, normaliserCode, signerJeton } from "./lib/famille.ts";
@@ -258,10 +258,18 @@ async function rapprocher(lignes: { app: Application; d: Donnees }[]) {
   if (provisoire) refs = [];
   const idsRefs = new Set(refs.map(r => r.id));
   const resultat: { app: string; studentId: string; nom: string; classe: string; statut: "confirme" | "auto" | "a_verifier" | "aucun" | "ignore"; refId: string | null; candidats: string[] }[] = [];
-  for (const { app, d } of lignes) {
+  // Certaines applications rangent l'élève dans une « classe » qui porte son propre nom (« LE LOCH » pour Marie LE LOCH) :
+  // ce n'est pas une classe. Ces élèves passent après les autres, pour être rattachés par leur nom à leur vraie classe.
+  const entrees = lignes.flatMap(({ app, d }) => {
     const classeDe = new Map(d.classes.map(c => [c.id, c.name]));
-    for (const s of d.students) {
-      const classe = s.className || classeDe.get(s.classId) || "";
+    return d.students.map(s => {
+      const brute = s.className || classeDe.get(s.classId) || "";
+      return { app, s, classe: classeEstUnNom(brute, s.name) ? "" : brute };
+    });
+  });
+  entrees.sort((a, b) => Number(!a.classe) - Number(!b.classe));
+  for (const { app, s, classe } of entrees) {
+    {
       const c = cleCorr(app.id, s.id);
       // Un choix vers un élève de la liste provisoire ne vaut plus une fois la liste de l'établissement importée.
       if (choix.has(c) && (provisoire || choix.get(c) === null || idsRefs.has(choix.get(c) as string))) {
@@ -274,7 +282,7 @@ async function rapprocher(lignes: { app: Application; d: Donnees }[]) {
       else if (provisoire && dec.statut === "aucun") {
         const morceaux = s.name.trim().split(/\s+/);
         // Même classe écrite autrement (« 5e B », « 5ème B ») : on garde l'écriture déjà vue.
-        const classeVue = refs.find(r => cleClasse(r.classe) === cleClasse(classe))?.classe || classe;
+        const classeVue = !classe ? "Sans classe" : refs.find(r => cleClasse(r.classe) === cleClasse(classe))?.classe || classe;
         const ref = { id: `app_${cleClasse(classe)}_${normaliser(s.name).replace(/ /g, "-")}`, classe: classeVue, nom: morceaux.slice(1).join(" ") || morceaux[0], prenom: morceaux.length > 1 ? morceaux[0] : "" };
         refs.push(ref);
         resultat.push({ app: app.id, studentId: s.id, nom: s.name, classe, statut: "auto", refId: ref.id, candidats: [] });
