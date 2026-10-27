@@ -483,6 +483,8 @@ const parNom = (a: EleveRef, b: EleveRef) => a.classe.localeCompare(b.classe, "f
 // Tableau en direct : une ligne par élève, un bloc par application.
 app.get("/api/tableau", exigerEnseignant(), route(async (req, res) => {
   const t = await calculerTableau(ensDe(req), req.query.frais === "1");
+  // L'accueil élève/parent propose cet enseignant, ses classes et ses élèves suivis.
+  await synchroAnnuaire(ensDe(req), t).catch(err => console.error("Annuaire de l'accueil :", err));
   res.json({
     provisoire: t.provisoire,
     applications: t.applications,
@@ -1018,16 +1020,29 @@ app.post("/api/publier/bulletin", exigerEnseignant(), route(async (req, res) => 
 const identifiantDe = (r: EleveRef) => normaliserCode(`${r.prenom} ${r.nom} ${cleClasse(r.classe)}`).replace(/-/g, ".");
 
 // Annuaire de l'accueil élève/parent : on choisit son enseignant, sa classe, puis son nom, avant le mot de passe.
-// annuaire/{uid}__{classe} : uid, enseignant, classe, classeNom, eleves { refId: { prenom, nom } } — seulement les élèves qui ont un accès.
-async function majAnnuaire(e: Enseignant, classe: string, eleves: EleveRef[]) {
-  const docs = eleves.length ? await db.getAll(...eleves.map(r => db.doc(`codesEleves/${r.id}`))) : [];
-  const avecAcces = eleves.filter((_, i) => docs[i]?.exists);
-  const ref = db.doc(`annuaire/${e.uid}__${classe}`);
-  if (!avecAcces.length) { await ref.delete(); return; }
-  await ref.set({
-    uid: e.uid, enseignant: await nomEnseignant(e), classe, classeNom: avecAcces[0].classe, majLe: new Date().toISOString(),
-    eleves: Object.fromEntries(avecAcces.map(r => [r.id, { prenom: r.prenom, nom: r.nom }])),
-  });
+// annuaire/{uid}__{classe} : uid, enseignant, classe, classeNom, eleves { refId: { prenom, nom } } — tous les élèves suivis de la classe.
+// Mis à jour chaque fois que l'enseignant ouvre son tableau (écrit seulement quand quelque chose a changé).
+const annuaireEcrit = new Map<string, string>();
+async function synchroAnnuaire(e: Enseignant, t: Awaited<ReturnType<typeof calculerTableau>>) {
+  const nom = await nomEnseignant(e);
+  const parClasse = new Map<string, EleveRef[]>();
+  for (const r of t.refs.filter(r => t.presents.has(r.id))) {
+    const c = cleClasse(r.classe);
+    if (c && c.length <= 40) parClasse.set(c, [...(parClasse.get(c) || []), r]);
+  }
+  const contenu = Array.from(parClasse.entries()).map(([classe, eleves]) => ({
+    id: `${e.uid}__${classe}`, uid: e.uid, enseignant: nom, classe, classeNom: eleves[0].classe,
+    eleves: Object.fromEntries(eleves.sort(parNom).map(r => [r.id, { prenom: r.prenom, nom: r.nom }])),
+  }));
+  const empreinte = JSON.stringify(contenu);
+  if (annuaireEcrit.get(e.uid) === empreinte) return;
+  const avant = await db.collection("annuaire").where("uid", "==", e.uid).get();
+  const lot = db.batch();
+  const gardes = new Set(contenu.map(c => c.id));
+  for (const d of avant.docs) if (!gardes.has(d.id)) lot.delete(d.ref);
+  for (const { id, ...c } of contenu) lot.set(db.doc(`annuaire/${id}`), { ...c, majLe: new Date().toISOString() });
+  await lot.commit();
+  annuaireEcrit.set(e.uid, empreinte);
 }
 
 app.get("/api/famille/codes", exigerEnseignant(), route(async (req, res) => {
@@ -1035,7 +1050,7 @@ app.get("/api/famille/codes", exigerEnseignant(), route(async (req, res) => {
   const t = await calculerTableau(ensDe(req));
   const eleves = elevesSuivis(t, classe);
   const docs = eleves.length ? await db.getAll(...eleves.map(r => db.doc(`codesEleves/${r.id}`))) : [];
-  if (classe) await majAnnuaire(ensDe(req), classe, eleves);
+  await synchroAnnuaire(ensDe(req), t);
   res.json({ eleves: eleves.map((r, i) => ({
     id: r.id, nom: r.nom, prenom: r.prenom, classe: r.classe, codeLe: docs[i]?.get("le") || null,
     identifiant: docs[i]?.get("identifiant") || null, personnalise: !!docs[i]?.get("mdp"),
@@ -1076,7 +1091,6 @@ app.post("/api/famille/codes", exigerEnseignant(), route(async (req, res) => {
     await lot.commit();
     codes.push({ id: r.id, nom: r.nom, prenom: r.prenom, classe: r.classe, identifiant, code });
   }
-  if (classe) await majAnnuaire(e, classe, elevesSuivis(t, classe));
   res.json({ codes, adresse: `${ADRESSE}/famille`, motDeClasse: codes.length && codeCommun ? codeCommun : null });
 }));
 
@@ -1138,6 +1152,7 @@ app.post("/api/famille/connexion", route(async (req, res) => {
     const mdp = String(req.body?.motDePasse || "").trim();
     const refId = choisi && !choisi.includes("/") ? choisi : id ? (await db.doc(`identifiants/${id}`).get()).get("refId") : null;
     const c = refId ? (await db.doc(`codesEleves/${refId}`).get()).data() : null;
+    if (choisi && !c) throw httpError(401, "Pas encore de mot de passe pour cet élève : demandez-le à l'enseignant (onglet « Familles »).");
     if (c?.mdp && correspond(mdp, c.mdp)) return res.json({ enfants: [await enfantPour(refId, sec)] });
     // Code de départ : accepté seulement tant que l'élève n'a pas choisi son mot de passe.
     if (c && !c.mdp && c.h === empreinteCodeFamille(mdp, sec)) {

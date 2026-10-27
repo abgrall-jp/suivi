@@ -235,6 +235,10 @@ t('bulletin publié', (await jean('/api/publier/bulletin', { trimestre: 'T1', cl
 t('date de publication visible dans le bulletin', !!(await jean('/api/bulletin?trimestre=T1&classe=5B')).data.publieLe);
 const listeCodes = (await jean('/api/famille/codes?classe=5B')).data.eleves;
 t('codes : élèves suivis de la classe, sans code', listeCodes.length === 2 && listeCodes.every(e => !e.codeLe), listeCodes);
+const ann0 = (await famille('/api/famille/annuaire')).data.enseignants;
+t('accueil : l’enseignant apparaît dès qu’il ouvre son tableau, avant toute fiche', ann0.length === 1 && ann0[0].classes.length === 1, ann0);
+const sansCode = await famille('/api/famille/connexion', null, { refId: '5b_durand_alice', motDePasse: 'nimporte' });
+t('accueil : élève sans mot de passe de départ, message clair', sansCode.status === 401 && /Pas encore de mot de passe/.test(sansCode.data.error), sansCode.data);
 t('mot de passe de classe trop court : refusé', (await jean('/api/famille/codes', { classe: '5B', motDeClasse: 'abc' })).status === 400);
 const cc = (await jean('/api/famille/codes', { classe: '5B', motDeClasse: 'Classe-5B' })).data;
 t('fiches : identifiant de chaque élève et mot de passe de classe commun', cc.codes.length === 2 && cc.motDeClasse === 'Classe-5B' && cc.codes.every(c => c.code === 'Classe-5B') && cc.codes.find(c => c.id === '5b_durand_alice')?.identifiant === 'alice.durand.5b' && cc.adresse.endsWith('/famille'), cc);
