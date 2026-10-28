@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api.ts";
 import { EnteteColonne } from "./outils.tsx";
 import { BoutonPublier } from "./Famille.tsx";
@@ -53,10 +53,10 @@ export function VueBulletin() {
   const [info, setInfo] = useState("");
   const [reglage, setReglage] = useState(false);
 
-  const charger = useCallback(async () => {
+  const charger = useCallback(async (silencieux = false) => {
     try {
       const q = trimestre && classe ? `?trimestre=${trimestre}&classe=${encodeURIComponent(classe)}` : "";
-      const d = await api<Bulletin>(`/api/bulletin${q}`);
+      const d = await api<Bulletin>(`/api/bulletin${q}`, undefined, silencieux);
       setB(d); setMsg("");
       if (!trimestre) setTrimestre(trimestreDuJour(d.periodes));
       if (!classe && d.classes.length === 1) setClasse(d.classes[0].cle);
@@ -64,17 +64,30 @@ export function VueBulletin() {
     } catch (e: any) { setMsg(e.message); }
   }, [trimestre, classe]);
   useEffect(() => { charger(); }, [charger]);
+  // Après une saisie, la page change tout de suite ; le bulletin (moyennes) est relu discrètement 3 secondes après la dernière.
+  const relecture = useRef<number | undefined>(undefined);
+  const relireBientot = () => { window.clearTimeout(relecture.current); relecture.current = window.setTimeout(() => charger(true), 3000); };
+  const changerLigne = (refId: string, f: (l: LigneBulletin) => LigneBulletin) =>
+    setB(prev => prev && { ...prev, eleves: prev.eleves?.map(l => (l.id === refId ? f(l) : l)) });
 
   const enregistrer = async (refId: string, champ: Record<string, unknown>) => {
     setMsg("");
-    try { await api("/api/bulletin/eleve", { trimestre, classe, refId, ...champ }); await charger(); } catch (e: any) { setMsg(e.message); }
+    const nombre = (v: unknown) => (v === null || v === "" ? null : Number(String(v).replace(",", ".")));
+    changerLigne(refId, l => ({
+      ...l,
+      ...("finale" in champ ? { finale: nombre(champ.finale) } : {}),
+      ...("appreciation" in champ ? { appreciation: String(champ.appreciation), appreciationEcrite: true } : {}),
+      ...("externes" in champ ? { externes: Object.fromEntries(Object.entries(champ.externes as Record<string, unknown>).map(([k, v]) => [k, nombre(v)])) } : {}),
+    }));
+    try { await api("/api/bulletin/eleve", { trimestre, classe, refId, ...champ }, true); relireBientot(); } catch (e: any) { setMsg(e.message); charger(true); }
   };
 
   // Note d'une colonne saisie à la main (perdue ou absente des applications) ; vide efface la note saisie.
   const saisirNote = async (refId: string, cle: string, v: string, manuelle: boolean) => {
     if (!v.trim() && !manuelle) return; // effacer une note des applications : rien à faire
     setMsg("");
-    try { await api("/api/notes-manuelles", { refId, cle, note: v, trimestre }); await charger(); } catch (e: any) { setMsg(e.message); }
+    if (v.trim()) changerLigne(refId, l => ({ ...l, notes: { ...l.notes, [cle]: Number(v.replace(",", ".")) }, manuelles: [...(l.manuelles || []).filter(c => c !== cle), cle] }));
+    try { await api("/api/notes-manuelles", { refId, cle, note: v, trimestre }, true); relireBientot(); } catch (e: any) { setMsg(e.message); charger(true); }
   };
 
   if (!b || !trimestre) return msg ? <p className="erreur">{msg}</p> : <p>Chargement…</p>;
@@ -182,12 +195,19 @@ function AutreNote({ autre, onEffacer }: { autre?: { note: number | null; manuel
     : <span className="autre-note appli" title="Note de l'application, plus ancienne que la note saisie : elle ne compte pas">{note(autre.note)}</span>;
 }
 
+/** Entrée : enregistre la case et passe à la même colonne de l'élève suivant. */
+function allerEnDessous(input: HTMLInputElement) {
+  const td = input.closest("td");
+  const suivant = (td?.parentElement?.nextElementSibling as HTMLTableRowElement | null)?.cells[td!.cellIndex]?.querySelector("input");
+  if (suivant) { suivant.focus(); suivant.select(); } else input.blur();
+}
+
 function ChampNote({ valeur, indication, onValider }: { valeur: number | null; indication?: string; onValider: (v: string) => void }) {
   const [v, setV] = useState(note(valeur));
   useEffect(() => setV(note(valeur)), [valeur]);
   return (
     <input className="note" inputMode="decimal" value={v} placeholder={indication || ""} onChange={e => setV(e.target.value)}
-      onBlur={() => { if (v !== note(valeur)) onValider(v); }} onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
+      onBlur={() => { if (v !== note(valeur)) onValider(v); }} enterKeyHint="next" onKeyDown={e => { if (e.key === "Enter") allerEnDessous(e.target as HTMLInputElement); }} />
   );
 }
 

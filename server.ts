@@ -216,11 +216,31 @@ type Donnees = {
   results: { id: string; studentId: string; exerciseId: string; exerciseTitle: string; percent: number; score: string; completedAt: number | null }[];
 };
 const cacheDonnees = new Map<string, { at: number; data: Donnees }>();
+const lecturesEnCours = new Map<string, Promise<Donnees>>();
 async function donnees(a: Application, email: string, frais = false): Promise<Donnees> {
   const cle = `${a.id}:${email}`;
   const hit = cacheDonnees.get(cle);
-  // Gardées 2 minutes (le bouton Actualiser relit tout de suite) : chaque page n'interroge plus toutes les applications.
-  if (hit && Date.now() - hit.at < (frais ? 5000 : 120000)) return hit.data;
+  const age = hit ? Date.now() - hit.at : Infinity;
+  if (hit && age < (frais ? 5000 : 120000)) return hit.data;
+  // Lues il y a plus de 2 minutes (moins de 30) : on répond tout de suite avec elles, et on les relit en arrière-plan
+  // pour la page suivante. Le bouton Actualiser, lui, attend la lecture.
+  if (hit && !frais && age < 30 * 60e3) {
+    lireDonnees(a, email).catch(err => console.error(`Relecture de ${a.nom} :`, err?.message || err));
+    return hit.data;
+  }
+  return lireDonnees(a, email);
+}
+/** Une seule lecture à la fois par application et par enseignant. */
+function lireDonnees(a: Application, email: string): Promise<Donnees> {
+  const cle = `${a.id}:${email}`;
+  const enCours = lecturesEnCours.get(cle);
+  if (enCours) return enCours;
+  const p = lireDonneesPorte(a, email).finally(() => lecturesEnCours.delete(cle));
+  lecturesEnCours.set(cle, p);
+  return p;
+}
+async function lireDonneesPorte(a: Application, email: string): Promise<Donnees> {
+  const cle = `${a.id}:${email}`;
   const d = await porte(a, `/api/suivi/donnees?email=${encodeURIComponent(email)}`);
   const data: Donnees = {
     classes: Array.isArray(d.classes) ? d.classes : [],
@@ -439,6 +459,16 @@ async function notesManuelles(uid: string) {
   return snap.docs.map(d => d.data()).filter(d => d.refId && d.notes && typeof d.notes === "object");
 }
 
+// Élèves et colonnes du dernier tableau calculé pour chaque enseignant : sert à vérifier une saisie (note, ligne du bulletin)
+// sans relire toutes les applications à chaque fois.
+const derniersConnus = new Map<string, { at: number; refs: EleveRef[]; colonnes: Set<string> }>();
+async function connus(e: Enseignant) {
+  const m = derniersConnus.get(e.uid);
+  if (m && Date.now() - m.at < 15 * 60e3) return m;
+  await calculerTableau(e);
+  return derniersConnus.get(e.uid)!;
+}
+
 /** Résultats de l'enseignant rangés par élève de référence (le plus récent essai pour chaque exercice). */
 async function calculerTableau(e: Enseignant, frais = false) {
   const lus = await lireApplications(e, frais);
@@ -473,6 +503,10 @@ async function calculerTableau(e: Enseignant, frais = false) {
     essais.set(m.refId, parExo);
   }
   const plusRecent = (liste: Resultat[]) => liste.reduce((m, x) => ((x.at || 0) >= (m.at || 0) ? x : m));
+  derniersConnus.set(e.uid, {
+    at: Date.now(), refs,
+    colonnes: new Set(ok.flatMap(({ app: a, d }) => d.exercises.map(x => `${a.id}:${x.id}`))),
+  });
   const presents = new Set(resultat.map(r => r.refId).filter((id): id is string => !!id && gardes.has(id)));
   return {
     provisoire, refs, presents, essais, plusRecent, resultat,
@@ -639,8 +673,7 @@ app.post("/api/bulletin/eleve", exigerEnseignant(), route(async (req, res) => {
   const e = ensDe(req);
   const { trimestre, classe } = lireTrimestreClasse(req.body);
   const refId = texteCourt(req.body?.refId, 200);
-  const t = await calculerTableau(e);
-  if (!elevesDeClasse(t, classe).some(r => r.id === refId)) throw httpError(404, "Cet élève n'est pas dans cette classe.");
+  if (!(await connus(e)).refs.some(r => r.id === refId && cleClasse(r.classe) === classe)) throw httpError(404, "Cet élève n'est pas dans cette classe.");
   const ref = db.doc(`bulletins/${idBulletin(e.uid, trimestre, classe)}`);
   const b = (await ref.get()).data();
   if (!b) throw httpError(409, "Choisissez d'abord les notes à reprendre.");
@@ -692,9 +725,9 @@ app.post("/api/notes-manuelles", exigerEnseignant(), route(async (req, res) => {
   const cle = texteCourt(req.body?.cle, 300);
   const n = lireNote(req.body?.note);
   if (n === undefined) throw httpError(400, "La note doit être entre 0 et 20.");
-  const t = await calculerTableau(e);
-  if (!t.refs.some(r => r.id === refId)) throw httpError(404, "Élève introuvable.");
-  if (!t.applications.some(a => a.exercices.some(x => `${a.id}:${x.id}` === cle))) throw httpError(404, "Colonne introuvable.");
+  const c = await connus(e);
+  if (!c.refs.some(r => r.id === refId)) throw httpError(404, "Élève introuvable.");
+  if (!c.colonnes.has(cle)) throw httpError(404, "Colonne introuvable.");
   let at = Date.now();
   if (req.body?.trimestre !== undefined) {
     if (!estTrimestre(req.body.trimestre)) throw httpError(400, "Trimestre incorrect.");

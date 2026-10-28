@@ -58,6 +58,17 @@ await p.waitForSelector('.editeur-eleve');
 await p.click('.editeur-eleve button:has-text("Inverser")');
 await p.screenshot({ path: `${OUT}/6c-corriger-nom.png` });
 await p.click('.editeur-eleve button:has-text("Fermer")');
+// Saisie à la suite : Entrée passe tout de suite à l'élève suivant, sans attendre le serveur.
+await p.locator('table.tableau tbody tr:has-text("Alice")').locator('td').nth(colPresent + 1).click();
+await p.fill('table.tableau td.saisie input', '16');
+const t0 = Date.now();
+await p.press('table.tableau td.saisie input', 'Enter');
+await p.waitForSelector('table.tableau tbody tr:has-text("Bob") td.saisie input');
+const delai = Date.now() - t0;
+if (delai > 1000) throw new Error(`Passage à l'élève suivant trop lent : ${delai} ms`);
+console.log(`passage à l'élève suivant : ${delai} ms`);
+await p.press('table.tableau td.saisie input', 'Escape');
+await p.waitForSelector('table.tableau tr:has-text("Alice") td.manuelle:has-text("16/20")');
 await p.click('nav button:has-text("Bulletin")');
 await p.waitForSelector('text=Notes reprises dans le bulletin');
 await p.click('.case:has-text("Verbes irréguliers") input[type=checkbox]');
