@@ -11,6 +11,7 @@ import { APPLICATIONS, type Application } from "./lib/applications.ts";
 import { correspond, empreinte, genererMotDePasse } from "./lib/parents.ts";
 import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, normaliserCode, signerJeton } from "./lib/famille.ts";
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
+import { noteDeResultat, trimestresCommences } from "./lib/sequenceur.ts";
 import { plansDe, remarquesParEleve, type PlanPublie, type RemarqueEleve } from "./lib/planclasse.ts";
 import { colonnesManuelles, dateDansTrimestre, dateValide, essaiRetenu, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
 
@@ -144,7 +145,7 @@ function route(fn: (req: Request, res: Response) => Promise<any>) {
     } catch (e: any) {
       const status = Number(e?.status) || 500;
       if (status >= 500 && status !== 502) console.error(`${req.method} ${req.path}`, e);
-      if (!res.headersSent) res.status(status).json({ error: status >= 500 && status !== 502 ? "Erreur du serveur. Réessayez." : e.message });
+      if (!res.headersSent) res.status(status).json({ error: status >= 500 && status !== 502 ? "Erreur du serveur. Réessayez." : e.message, ...(e?.code && status < 500 ? { code: String(e.code) } : {}) });
     }
   };
 }
@@ -1330,6 +1331,129 @@ app.post("/api/admin/trimestres", exigerEnseignant(), route(async (req, res) => 
 }));
 
 // --- Pages ---------------------------------------------------------------------------------
+// --- Séquenceur : notes des autres applications et ligne de bulletin de l'élève -------------------
+// Seul le serveur du Séquenceur appelle ces routes, avec sa clé de liaison (SUIVI_CLE_SEQUENCEUR ici, SUIVI_CLE là-bas)
+// dans l'en-tête X-Suivi-Cle. L'enseignant est reconnu par l'adresse de son compte Séquenceur, celle qu'il a reliée dans Suivi.
+// Les élèves du Séquenceur portent l'identifiant qu'il donne à Suivi : « discipline~classe~élève ».
+const limiteSequenceur = makeLimiter(30, 15 * 60 * 1000);
+function exigerSequenceur() {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const cle = cleDe(appParId("sequenceur")!);
+    if (!cle) return res.status(404).json({ error: "Le Séquenceur n'est pas encore relié à Suivi." });
+    const recue = crypto.createHash("sha256").update(String(req.headers["x-suivi-cle"] || "")).digest();
+    if (crypto.timingSafeEqual(recue, crypto.createHash("sha256").update(cle).digest())) return next();
+    if (!limiteSequenceur(String(req.ip))) return res.status(429).json({ error: "Trop d'essais." });
+    res.status(401).json({ error: "Clé de liaison incorrecte." });
+  };
+}
+
+/** Comptes Suivi qui ont relié le Séquenceur avec cette adresse. */
+async function enseignantsDuSequenceur(req: Request): Promise<{ e: Enseignant; f: any }[]> {
+  const email = String(req.query.email || "").trim().toLowerCase();
+  if (!emailValide(email)) throw httpError(400, "Adresse e-mail incorrecte.");
+  const snap = await db.collection("enseignants").where("apps.sequenceur.email", "==", email).get();
+  if (snap.empty) throw Object.assign(httpError(404, "Aucun compte Suivi n'a relié le Séquenceur avec votre adresse : ouvrez Suivi et reliez le Séquenceur."), { code: "SUIVI_NON_RELIE" });
+  return snap.docs.map(d => {
+    const f = d.data();
+    const mail = String(f.email || "").toLowerCase();
+    return { e: { uid: d.id, email: mail, nom: String(f.nom || mail.split("@")[0]), isAdmin: ADMIN_EMAILS.includes(mail) }, f };
+  });
+}
+
+/** Applications reliées par l'enseignant dont le Séquenceur peut reprendre les notes (lues par leur porte de liaison). */
+const applisPourSequenceur = (f: any) => APPLICATIONS.filter(a => a.eleves && a.id !== "sequenceur" && parPorte(a) && estPrete(a) && f.apps?.[a.id]?.email);
+
+// Applications et exercices proposés dans un exercice du Séquenceur (« reprendre la note d'une autre application »).
+app.get("/api/sequenceur/exercices", exigerSequenceur(), route(async (req, res) => {
+  const comptes = await enseignantsDuSequenceur(req);
+  const vus = new Set<string>();
+  const applis: { id: string; nom: string; exercices: { id: string; titre: string }[]; erreur?: string }[] = [];
+  for (const { f } of comptes) {
+    for (const a of applisPourSequenceur(f)) {
+      if (vus.has(a.id)) continue;
+      vus.add(a.id);
+      try {
+        const d = await donnees(a, f.apps[a.id].email);
+        applis.push({ id: a.id, nom: a.nom, exercices: d.exercises.map(x => ({ id: String(x.id), titre: String(x.title || x.id) })) });
+      } catch (err: any) {
+        applis.push({ id: a.id, nom: a.nom, exercices: [], erreur: String(err?.message || err) });
+      }
+    }
+  }
+  res.json({ applis });
+}));
+
+// Notes des élèves à un exercice d'une application. Chaque note dit aussi à quels élèves du Séquenceur elle correspond,
+// d'après les correspondances de Suivi (« Noms des élèves ») : le Séquenceur n'a plus à deviner par le nom.
+app.get("/api/sequenceur/notes", exigerSequenceur(), route(async (req, res) => {
+  const a = appParId(req.query.appli);
+  const exercice = String(req.query.exercice || "");
+  const comptes = await enseignantsDuSequenceur(req);
+  const compte = a && comptes.find(c => applisPourSequenceur(c.f).some(x => x.id === a.id));
+  if (!a || !compte) throw httpError(404, `${a?.nom || "Cette application"} n'est pas reliée à votre compte Suivi.`);
+  const d = await donnees(a, compte.f.apps[a.id].email, true);
+  const exo = d.exercises.find(x => String(x.id) === exercice);
+  if (!exo) throw httpError(404, "Exercice introuvable.");
+  // Élève de l'application → élève de référence → élèves du Séquenceur.
+  const t = await calculerTableau(compte.e);
+  const refDe = new Map(t.resultat.filter(r => r.refId).map(r => [`${r.app}:${r.studentId}`, r.refId as string]));
+  const seqDe = new Map<string, string[]>();
+  for (const r of t.resultat) if (r.app === "sequenceur" && r.refId) seqDe.set(r.refId, [...(seqDe.get(r.refId) || []), r.studentId]);
+  const eleveDe = new Map(d.students.map(s => [s.id, s]));
+  const classeDe = new Map(d.classes.map(c => [c.id, c.name]));
+  const notes = d.results.filter(r => String(r.exerciseId) === exercice).flatMap(r => {
+    const n = noteDeResultat(r.score, r.percent);
+    const s = eleveDe.get(r.studentId);
+    if (!n || !s) return [];
+    const refId = refDe.get(`${a.id}:${r.studentId}`);
+    return [{
+      eleve: s.name, classe: s.className || classeDe.get(s.classId) || "", note: n.note, sur: n.sur,
+      date: r.completedAt ? new Date(r.completedAt).toISOString() : undefined,
+      sequenceur: (refId && seqDe.get(refId)) || [],
+    }];
+  });
+  res.json({ exercice: { id: String(exo.id), titre: String(exo.title || exo.id) }, notes });
+}));
+
+// Ligne de l'élève, montrée en haut de sa page dans le Séquenceur : les notes que son enseignant a retenues pour le bulletin
+// (colonnes et coefficients choisis dans Suivi), pour chaque trimestre commencé, et l'appréciation une fois le bulletin publié.
+app.get("/api/sequenceur/eleve", exigerSequenceur(), route(async (req, res) => {
+  const ids = String(req.query.ids || "").split(",").map(s => s.trim()).filter(Boolean).slice(0, 10);
+  if (!ids.length) throw httpError(400, "Élève manquant.");
+  const comptes = await enseignantsDuSequenceur(req);
+  const per = await periodes();
+  const trimestres = trimestresCommences(per);
+  const bulletins: any[] = [];
+  let eleve: { prenom: string; nom: string; classe: string } | null = null;
+  for (const { e } of comptes) {
+    const t = await calculerTableau(e);
+    const refId = t.resultat.find(r => r.app === "sequenceur" && r.refId && ids.includes(r.studentId))?.refId;
+    const ref = refId ? t.refs.find(r => r.id === refId) : undefined;
+    if (!ref) continue;
+    eleve ||= { prenom: ref.prenom, nom: ref.nom, classe: ref.classe };
+    const classe = cleClasse(ref.classe);
+    const essais = t.essais.get(ref.id) || {};
+    const docs = await db.getAll(...trimestres.flatMap(tr => [
+      db.doc(`bulletins/${idBulletin(e.uid, tr, classe)}`), db.doc(`publications/${e.uid}__bulletin__${tr}__${classe}`),
+    ]));
+    trimestres.forEach((tr, i) => {
+      const b = docs[2 * i].data();
+      if (!b?.colonnes?.length) return;
+      const pub = docs[2 * i + 1].data();
+      const colonnes = (b.colonnes as any[]).map(c => ({ cle: String(c.cle), app: String(c.app || ""), titre: String(c.titre || ""), coef: lireCoef(c.coef) }));
+      const finale = b.eleves?.[ref.id]?.finale;
+      bulletins.push({
+        trimestre: tr, enseignant: String(b.nom || ""), periode: per[tr],
+        colonnes: colonnes.map(c => ({ ...c, note: noteColonne(essais[c.cle], per[tr]) })),
+        moyenne: typeof finale === "number" ? finale : noteSur20(essais, colonnes, per[tr]), definitive: typeof finale === "number",
+        appreciation: pub ? String(pub.eleves?.[ref.id]?.appreciation || "") : "", publieLe: pub ? String(pub.publieLe || "") : null,
+      });
+    });
+  }
+  if (!eleve) throw Object.assign(httpError(404, "Élève pas encore rattaché dans Suivi."), { code: "ELEVE_INCONNU" });
+  res.json({ eleve, bulletins });
+}));
+
 async function startServer() {
   const webConfig: any = { apiKey: appletConfig.apiKey, authDomain: appletConfig.authDomain, projectId, appId: appletConfig.appId };
   if (process.env.USE_FIREBASE_EMULATORS === "1") webConfig.emulators = { authPort: 9099 };
