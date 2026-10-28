@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, connexionEmail, connexionGoogle, deconnexion, inscriptionEmail, motDePasseOublie } from "./firebase.ts";
-import { api, type Correspondances, type Moi, type Tableau } from "./api.ts";
+import { api, suivreChargements, type Correspondances, type Moi, type Tableau } from "./api.ts";
 import { ReglagesAdmin, VueBulletin, VueProfPrincipal } from "./Bulletin.tsx";
 import { ParentsOubli, VueParents } from "./Parents.tsx";
 import { EnteteColonne, sansAccent } from "./outils.tsx";
@@ -55,6 +55,7 @@ function Enseignants() {
 
   return (
     <div className="appli">
+      <BarreChargement />
       <header>
         <strong>Suivi</strong>
         <nav>
@@ -83,6 +84,13 @@ function Enseignants() {
       </main>
     </div>
   );
+}
+
+/** Barre fine en haut de la page tant qu'un chargement est en cours (dans n'importe quel onglet). */
+function BarreChargement() {
+  const [n, setN] = useState(0);
+  useEffect(() => suivreChargements(setN), []);
+  return <div className={`barre-chargement${n > 0 ? " active" : ""}`} role="progressbar" aria-label="Chargement en cours" aria-hidden={n === 0} />;
 }
 
 // --- Accueil : élève, parent ou professeur --------------------------------------------------
@@ -283,15 +291,16 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
   const [voirMasquees, setVoirMasquees] = useState(false);
   const defile = useRef<HTMLDivElement>(null);
   const [saisie, setSaisie] = useState<string | null>(null); // case en cours de saisie : « refId|colonne »
+  const [edite, setEdite] = useState<string | null>(null); // élève dont on corrige le nom ou qu'on fusionne
 
-  const charger = useCallback(async (frais = false) => {
-    try { const d = await api<Tableau>(`/api/tableau${frais ? "?frais=1" : ""}`); setT(d); onAVerifier(d.aVerifier); setMsg(""); } catch (e: any) { setMsg(e.message); }
+  const charger = useCallback(async (frais = false, silencieux = false) => {
+    try { const d = await api<Tableau>(`/api/tableau${frais ? "?frais=1" : ""}`, undefined, silencieux); setT(d); onAVerifier(d.aVerifier); setMsg(""); } catch (e: any) { setMsg(e.message); }
   }, [onAVerifier]);
 
   // Mise à jour toutes les 30 secondes, tant que la page est visible.
   useEffect(() => {
     charger();
-    const id = setInterval(() => { if (document.visibilityState === "visible") charger(); }, 30000);
+    const id = setInterval(() => { if (document.visibilityState === "visible") charger(false, true); }, 30000);
     return () => clearInterval(id);
   }, [charger]);
 
@@ -371,6 +380,10 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
           <button className="lien" onClick={() => { masquer([]); setVoirMasquees(false); }}>Tout afficher</button>
         </div>
       )}
+      {edite && t && (() => {
+        const el = t.eleves.find(x => x.id === edite);
+        return el ? <EditeurEleve eleve={el} autres={t.eleves.filter(x => x.id !== el.id)} onFini={async () => { setEdite(null); await charger(); }} onErreur={setMsg} /> : null;
+      })()}
       {t?.applications.filter(a => a.erreur).map(a => <p key={a.id} className="alerte">{a.nom} : {a.erreur}</p>)}
       {t && t.aVerifier > 0 && (
         <p className="alerte">{t.aVerifier} nom{t.aVerifier > 1 ? "s" : ""} d'élève à vérifier : leurs résultats n'apparaissent pas encore.{" "}
@@ -397,7 +410,7 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
             <tbody>
               {eleves.map(e => (
                 <tr key={e.id}>
-                  <td className="fixe"><span className="nom">{e.nom} {e.prenom}</span><span className="classe">{e.classe}
+                  <td className="fixe"><button className="nom lien-nom" title="Corriger le nom, inverser nom et prénom, ou fusionner avec un autre élève" onClick={() => setEdite(e.id)}>{e.nom} {e.prenom}</button><span className="classe">{e.classe}
                     <button className="lien retirer" title="Ne plus suivre cet élève" onClick={() => retirer(e.id, `${e.nom} ${e.prenom}`.trim())}>retirer</button></span></td>
                   {apps.flatMap(a => a.exercices.map(x => {
                     const cle = `${a.id}:${x.id}`;
@@ -417,6 +430,36 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
         </div>
       )}
     </section>
+  );
+}
+
+/** Corriger le nom d'un élève (inverser nom et prénom) ou le fusionner avec un autre (le même élève, écrit autrement). */
+function EditeurEleve({ eleve, autres, onFini, onErreur }: { eleve: Ref; autres: Ref[]; onFini: () => void; onErreur: (m: string) => void }) {
+  const [prenom, setPrenom] = useState(eleve.prenom);
+  const [nom, setNom] = useState(eleve.nom);
+  const [occupe, setOccupe] = useState(false);
+  const boite = useRef<HTMLDivElement>(null);
+  useEffect(() => { boite.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }, [eleve.id]);
+  const faire = async (fn: () => Promise<unknown>) => { setOccupe(true); try { await fn(); onFini(); } catch (e: any) { onErreur(e.message); } finally { setOccupe(false); } };
+  return (
+    <div className="carte editeur-eleve" ref={boite}>
+      <strong>{eleve.nom} {eleve.prenom}</strong> <span className="petit">({eleve.classe})</span>
+      <div className="ligne">
+        <label>Prénom <input value={prenom} onChange={ev => setPrenom(ev.target.value)} /></label>
+        <label>Nom <input value={nom} onChange={ev => setNom(ev.target.value)} /></label>
+        <button title="Échanger le nom et le prénom" onClick={() => { setPrenom(nom); setNom(prenom); }}>⇄ Inverser</button>
+        <button className="principal" disabled={occupe || !nom.trim()} onClick={() => faire(() => api("/api/eleves/nom", { refId: eleve.id, nom, prenom }))}>Enregistrer</button>
+        <button disabled={occupe} onClick={onFini}>Fermer</button>
+      </div>
+      <div className="ligne">
+        <span className="petit">Le même élève apparaît deux fois ? Fusionner avec :</span>
+        <ChoixEleve refs={autres} placeholder="Tapez les premières lettres de l'autre nom" onChoix={r => {
+          if (confirm(`Fusionner « ${eleve.nom} ${eleve.prenom} » avec « ${r.nom} ${r.prenom} » ? Ses résultats passent sur ${r.prenom || r.nom}. Rien ne change dans les applications.`))
+            faire(() => api("/api/eleves/fusionner", { de: eleve.id, vers: r.id }));
+        }} />
+      </div>
+      <p className="petit">La correction et la fusion valent dans Suivi seulement (tableau, bulletin, familles) : les applications d'origine ne sont pas modifiées.</p>
+    </div>
   );
 }
 

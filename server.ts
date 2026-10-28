@@ -283,12 +283,24 @@ async function rapprocher(lignes: { app: Application; d: Donnees }[]) {
         const morceaux = s.name.trim().split(/\s+/);
         // Même classe écrite autrement (« 5e B », « 5ème B ») : on garde l'écriture déjà vue.
         const classeVue = !classe ? "Sans classe" : refs.find(r => cleClasse(r.classe) === cleClasse(classe))?.classe || classe;
-        const ref = { id: `app_${cleClasse(classe)}_${normaliser(s.name).replace(/ /g, "-")}`, classe: classeVue, nom: morceaux.slice(1).join(" ") || morceaux[0], prenom: morceaux.length > 1 ? morceaux[0] : "" };
+        // « LE BRAS Maël » ou « Maël LE BRAS » : les mots en majuscules forment le nom ; sinon le premier mot est le prénom.
+        const majuscule = (m: string) => m.length > 1 && m === m.toLocaleUpperCase("fr") && m !== m.toLocaleLowerCase("fr");
+        const enMaj = morceaux.filter(majuscule);
+        const [nom, prenom] = enMaj.length && enMaj.length < morceaux.length
+          ? [enMaj.join(" "), morceaux.filter(m => !majuscule(m)).join(" ")]
+          : [morceaux.slice(1).join(" ") || morceaux[0], morceaux.length > 1 ? morceaux[0] : ""];
+        const ref = { id: `app_${cleClasse(classe)}_${normaliser(s.name).replace(/ /g, "-")}`, classe: classeVue, nom, prenom };
         refs.push(ref);
         resultat.push({ app: app.id, studentId: s.id, nom: s.name, classe, statut: "auto", refId: ref.id, candidats: [] });
       } else resultat.push({ app: app.id, studentId: s.id, nom: s.name, classe, statut: dec.statut, refId: null, candidats: dec.statut === "a_verifier" ? dec.candidats : [] });
     }
   }
+  // Nom et prénom corrigés par un enseignant (inversés dans une application, par exemple).
+  const corr = new Map((await db.collection("corrections").get()).docs.map(d => [d.id, d.data()]));
+  refs = refs.map(r => {
+    const c = corr.get(r.id.replace(/\//g, "_"));
+    return c ? { ...r, nom: String(c.nom ?? r.nom), prenom: String(c.prenom ?? r.prenom) } : r;
+  });
   return { refs, provisoire, resultat };
 }
 
@@ -463,7 +475,7 @@ async function calculerTableau(e: Enseignant, frais = false) {
   const plusRecent = (liste: Resultat[]) => liste.reduce((m, x) => ((x.at || 0) >= (m.at || 0) ? x : m));
   const presents = new Set(resultat.map(r => r.refId).filter((id): id is string => !!id && gardes.has(id)));
   return {
-    provisoire, refs, presents, essais, plusRecent,
+    provisoire, refs, presents, essais, plusRecent, resultat,
     applications: lus.map(l => ({
       id: l.app.id, code: l.app.code, nom: l.app.nom, erreur: l.erreur,
       exercices: (l.d?.exercises || []).filter(x => l.d!.results.some(r => r.exerciseId === x.id)).map(x => ({ id: x.id, titre: x.title })),
@@ -764,6 +776,45 @@ app.post("/api/correspondances", exigerEnseignant(), route(async (req, res) => {
   }
   await db.doc(`correspondances/${cleCorr(a.id, studentId)}`).set({ refId, par: e.email, le: new Date().toISOString() });
   res.json({ ok: true });
+}));
+
+// Corriger le nom et le prénom d'un élève (vides : revenir à ceux des applications).
+// corrections/{refId} : nom, prenom, par, le — valable pour tous les enseignants.
+app.post("/api/eleves/nom", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const refId = texteCourt(req.body?.refId, 200);
+  const nom = texteCourt(req.body?.nom, 80).trim(), prenom = texteCourt(req.body?.prenom, 80).trim();
+  const t = await calculerTableau(e);
+  if (!t.refs.some(r => r.id === refId)) throw httpError(404, "Élève introuvable.");
+  const ref = db.doc(`corrections/${refId.replace(/\//g, "_")}`);
+  if (!nom && !prenom) await ref.delete();
+  else if (!nom) throw httpError(400, "Le nom ne peut pas être vide.");
+  else await ref.set({ nom, prenom, par: e.email, le: new Date().toISOString() });
+  res.json({ ok: true });
+}));
+
+// Fusionner deux élèves (le même élève, écrit autrement dans deux applications) : les comptes de l'un sont rattachés à l'autre.
+// Rien n'est changé dans les applications d'origine.
+app.post("/api/eleves/fusionner", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const de = texteCourt(req.body?.de, 200), vers = texteCourt(req.body?.vers, 200);
+  if (!de || !vers || de === vers) throw httpError(400, "Choisissez deux élèves différents.");
+  const t = await calculerTableau(e, true);
+  if (!t.refs.some(r => r.id === de) || !t.refs.some(r => r.id === vers)) throw httpError(404, "Élève introuvable.");
+  const comptes = t.resultat.filter(r => r.refId === de);
+  if (!comptes.length) throw httpError(404, "Aucun compte d'application à rattacher.");
+  const lot = db.batch();
+  const le = new Date().toISOString();
+  for (const c of comptes) lot.set(db.doc(`correspondances/${cleCorr(c.app, c.studentId)}`), { refId: vers, par: e.email, le, fusion: de });
+  // Les notes saisies à la main suivent l'élève (celles déjà posées sur l'autre restent).
+  const mDe = await db.doc(`notesManuelles/${idNotesManuelles(e.uid, de)}`).get();
+  if (mDe.exists) {
+    const mVers = (await db.doc(`notesManuelles/${idNotesManuelles(e.uid, vers)}`).get()).data();
+    lot.set(db.doc(`notesManuelles/${idNotesManuelles(e.uid, vers)}`), { uid: e.uid, refId: vers, notes: { ...(mDe.get("notes") || {}), ...(mVers?.notes || {}) } });
+    lot.delete(mDe.ref);
+  }
+  await lot.commit();
+  res.json({ ok: true, comptes: comptes.length });
 }));
 
 // Colonnes du tableau que l'enseignant a masquées (« app:exercice »).

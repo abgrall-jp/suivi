@@ -191,6 +191,24 @@ await studio.collection('appreciations').doc('premium_bob').set({ teacherId: uid
 buc = (await jean('/api/bulletin?trimestre=T1&classe=5B')).data;
 t('appréciation d’une séance de classe du Studio (period, createdAt) reprise pour Bob', buc.eleves.find(e => e.id === '5b_leroy_bob')?.studio?.prof === 'Bob progresse.', buc.eleves.find(e => e.id === '5b_leroy_bob'));
 await studio.collection('appreciations').doc('premium_bob').delete();
+console.log('Corriger les noms, fusionner');
+{
+  const el = async (id) => (await jean('/api/tableau')).data.eleves.find(e => e.id === id);
+  t('nom vide : refusé', (await jean('/api/eleves/nom', { refId: '5b_durand_alice', nom: '', prenom: 'Durand' })).status === 400);
+  t('nom et prénom inversés', (await jean('/api/eleves/nom', { refId: '5b_durand_alice', nom: 'Alice', prenom: 'Durand' })).status === 200);
+  const a1 = await el('5b_durand_alice');
+  t('tableau : le nom corrigé est affiché', a1?.nom === 'Alice' && a1.prenom === 'Durand', a1);
+  await jean('/api/eleves/nom', { refId: '5b_durand_alice', nom: '', prenom: '' });
+  t('correction effacée : nom d’origine', (await el('5b_durand_alice'))?.nom === 'DURAND');
+  t('fusion d’un élève avec lui-même : refusée', (await jean('/api/eleves/fusionner', { de: '5b_leroy_bob', vers: '5b_leroy_bob' })).status === 400);
+  const avant = Object.keys((await el('5b_leroy_bob')).resultats).length;
+  const f1 = await jean('/api/eleves/fusionner', { de: '5b_leroy_bob', vers: '5b_petit_chloe' });
+  t('fusion : les comptes de Bob passent sur Chloé', f1.status === 200 && f1.data.comptes >= 1, f1.data);
+  const c1 = await el('5b_petit_chloe');
+  t('tableau : Chloé a les résultats, Bob n’apparaît plus', Object.keys(c1?.resultats || {}).length === avant && !(await el('5b_leroy_bob')), c1);
+  await jean('/api/eleves/fusionner', { de: '5b_petit_chloe', vers: '5b_leroy_bob' });
+  t('fusion inverse : Bob retrouve ses résultats', Object.keys((await el('5b_leroy_bob'))?.resultats || {}).length === avant);
+}
 console.log('Élèves et classes non suivis');
 t('« Test Prof » : compte de test, jamais suivi', !(await jean('/api/tableau')).data.eleves.some(e => /test/i.test(`${e.nom} ${e.prenom}`)));
 t('colonne masquée enregistrée', (await jean('/api/colonnes-masquees', { masquees: ['textetrous:ex1'] })).status === 200 && JSON.stringify((await jean('/api/tableau?frais=1')).data.masquees) === '["textetrous:ex1"]');

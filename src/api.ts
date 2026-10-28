@@ -1,7 +1,19 @@
 import { auth } from "./firebase.ts";
 
-/** Appel du serveur de Suivi avec le jeton de l'enseignant connecté. */
-export async function api<T = any>(chemin: string, body?: unknown): Promise<T> {
+// Chargements en cours, pour la barre de progression en haut de la page.
+let enCours = 0;
+const abonnes = new Set<(n: number) => void>();
+const signaler = (d: number) => { enCours += d; abonnes.forEach(f => f(enCours)); };
+export function suivreChargements(f: (n: number) => void) { abonnes.add(f); return () => { abonnes.delete(f); }; }
+
+/** Appel du serveur de Suivi avec le jeton de l'enseignant connecté (silencieux : sans barre de progression). */
+export async function api<T = any>(chemin: string, body?: unknown, silencieux = false): Promise<T> {
+  if (silencieux) return appel<T>(chemin, body);
+  signaler(1);
+  try { return await appel<T>(chemin, body); } finally { signaler(-1); }
+}
+
+async function appel<T>(chemin: string, body?: unknown): Promise<T> {
   const jeton = await auth.currentUser?.getIdToken();
   const envoyer = () => fetch(chemin, {
     method: body === undefined ? "GET" : "POST",

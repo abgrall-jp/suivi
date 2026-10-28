@@ -155,3 +155,15 @@ td.manuelle input.note { color: var(--manuelle-texte); font-weight: 600; backgro
 .connexion label.etape { display: flex; flex-direction: column; gap: 4px; text-align: left; font-size: 14px; font-weight: 600; }
 .connexion label.etape select, .connexion label.etape input { font-weight: 400; }
 .connexion p.petit button.lien { display: block; margin: 6px auto 0; }
+/* Barre de progression des chargements. */
+.barre-chargement { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 50; overflow: hidden; opacity: 0; transition: opacity .2s; pointer-events: none; }
+.barre-chargement.active { opacity: 1; }
+.barre-chargement::before { content: ""; position: absolute; top: 0; bottom: 0; width: 35%; background: var(--accent); animation: chargement 1.2s ease-in-out infinite; }
+@keyframes chargement { from { left: -35%; } to { left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .barre-chargement::before { animation: none; width: 100%; left: 0; opacity: .6; } }
+/* Correction du nom et fusion. */
+button.lien-nom { border: none; background: none; padding: 0; color: inherit; font: inherit; font-weight: 600; text-align: left; cursor: pointer; display: block; }
+button.lien-nom:hover { text-decoration: underline; }
+.editeur-eleve { margin: 12px 0; padding: 16px; }
+.editeur-eleve .ligne { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin-top: 10px; }
+.editeur-eleve label { display: flex; flex-direction: column; font-size: 13px; gap: 2px; }
