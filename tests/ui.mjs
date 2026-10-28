@@ -53,6 +53,19 @@ await p.fill('table.tableau td.saisie input', '17');
 await p.press('table.tableau td.saisie input', 'Enter');
 await p.waitForSelector('table.tableau td.manuelle:has-text("17/20")');
 await p.screenshot({ path: `${OUT}/6b-note-saisie.png` });
+// Classes concernées par une application ou une colonne.
+for (const bouton of await p.locator('th.groupe button.classes-app').all()) {
+  await bouton.click();
+  await p.waitForSelector('.classes-apps');
+  if (await p.locator('.classes-apps tr:has-text("Le présent")').count()) break;
+  await p.click('.classes-apps button:has-text("Fermer")');
+}
+await p.locator('.classes-apps tr:has-text("Le présent") input[type=checkbox]').first().uncheck();
+await p.waitForSelector('th.exo:has-text("Le présent")', { state: 'detached' });
+await p.screenshot({ path: `${OUT}/6d-classes-app.png` });
+await p.click('.classes-apps button:has-text("comme l\u2019application"), .classes-apps button:has-text("comme l\'application")');
+await p.waitForSelector('th.exo:has-text("Le présent")');
+await p.click('.classes-apps button:has-text("Fermer")');
 await p.click('table.tableau button.lien-nom:has-text("Bob")');
 await p.waitForSelector('.editeur-eleve');
 await p.click('.editeur-eleve button:has-text("Inverser")');

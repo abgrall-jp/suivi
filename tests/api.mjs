@@ -113,6 +113,20 @@ tab = (await jean('/api/tableau')).data;
 t('Bob : Mémoriser 0 % et Texte à trous 70 %', tab.eleves.find(e => e.id === '5b_leroy_bob')?.resultats['textetrous:ex1']?.percent === 70 && tab.eleves.find(e => e.id === '5b_leroy_bob')?.resultats['memoriser:deck_verbes']?.percent === 0);
 t('Chloé (sans compte dans les applications) absente du tableau', !tab.eleves.some(e => e.prenom === 'Chloé'));
 
+console.log('Classes par application');
+t('classes par application : clé inconnue refusée', (await jean('/api/classes-apps', { cle: 'inconnue', classes: ['2a'] })).status === 400);
+await jean('/api/classes-apps', { cle: 'textetrous', classes: ['2nde A'] });
+tab = (await jean('/api/tableau')).data;
+t('application réservée à une autre classe : plus de colonne pour la 5e B', !tab.eleves.some(e => e.resultats['textetrous:ex1']) && tab.eleves.find(e => e.id === '5b_durand_alice')?.resultats['memoriser:deck_verbes']?.percent === 50, tab.classesApps);
+t('réglage renvoyé', JSON.stringify(tab.classesApps) === '{"textetrous":["2ndea"]}', tab.classesApps);
+await jean('/api/classes-apps', { cle: 'textetrous:ex1', classes: ['5B'] });
+tab = (await jean('/api/tableau')).data;
+t('une colonne réglée à part l’emporte sur l’application', tab.eleves.find(e => e.id === '5b_durand_alice')?.resultats['textetrous:ex1']?.percent === 90);
+await jean('/api/classes-apps', { cle: 'textetrous:ex1', classes: [] });
+await jean('/api/classes-apps', { cle: 'textetrous', classes: [] });
+tab = (await jean('/api/tableau')).data;
+t('toutes les classes à nouveau', tab.eleves.find(e => e.id === '5b_durand_alice')?.resultats['textetrous:ex1']?.percent === 90 && JSON.stringify(tab.classesApps) === '{}', tab.classesApps);
+
 console.log('Bulletin (1er trimestre, 5e B)');
 let bu = (await jean('/api/bulletin')).data;
 t('classe proposée : 5e B', JSON.stringify(bu.classes) === '[{"cle":"5b","nom":"5B"}]', bu.classes);

@@ -292,6 +292,7 @@ function VueTableau({ moi, onAVerifier, allerA, actif }: { moi: Moi; onAVerifier
   const [cherche, setCherche] = useState("");
   const [tri, setTri] = useState<Tri>(null);
   const [voirMasquees, setVoirMasquees] = useState(false);
+  const [classesDe, setClassesDe] = useState<string | null>(null); // application dont on choisit les classes
   const defile = useRef<HTMLDivElement>(null);
   const actifRef = useRef(actif);
   // Retour sur l'onglet : relecture discrète (les données affichées restent visibles pendant ce temps).
@@ -402,6 +403,7 @@ function VueTableau({ moi, onAVerifier, allerA, actif }: { moi: Moi; onAVerifier
         {classe && <BoutonPublier publieLe={t?.publiees?.[cleCl(classe)] || null}
           onPublier={async () => { try { await api("/api/publier/tableau", { classe }); await charger(); } catch (e: any) { setMsg(e.message); } }}
           onRetirer={async () => { try { await api("/api/publier/tableau", { classe, retirer: true }); await charger(); } catch (e: any) { setMsg(e.message); } }} />}
+        {!!t?.applications.length && <button onClick={() => setClassesDe(classesDe ? null : t.applications[0].id)}>Classes par application</button>}
         {masquees.length > 0 && <button onClick={() => setVoirMasquees(!voirMasquees)}>Colonnes masquées ({masquees.length})</button>}
         {!!apps.length && <span className="defilement"><button title="Voir les colonnes de gauche" onClick={() => decaler(-1)}>◀</button><button title="Voir les colonnes de droite" onClick={() => decaler(1)}>▶</button></span>}
         {t && <span className="petit">Mis à jour à {new Date(t.lu).toLocaleTimeString("fr-FR")}</span>}
@@ -414,6 +416,14 @@ function VueTableau({ moi, onAVerifier, allerA, actif }: { moi: Moi; onAVerifier
           <button className="lien" onClick={() => { masquer([]); setVoirMasquees(false); }}>Tout afficher</button>
         </div>
       )}
+      {classesDe && t && (() => {
+        const a = t.applications.find(x => x.id === classesDe);
+        return a ? <ChoixClassesApp app={a} applications={t.applications} onApp={setClassesDe} classes={classes} reglage={t.classesApps || {}} onFermer={() => setClassesDe(null)}
+          onChanger={async (cle, liste) => {
+            setT(p => p && { ...p, classesApps: { ...(p.classesApps || {}), [cle]: liste } });
+            try { await api("/api/classes-apps", { cle, classes: liste }); await charger(); } catch (e: any) { setMsg(e.message); }
+          }} /> : null;
+      })()}
       {edite && t && (() => {
         const el = t.eleves.find(x => x.id === edite);
         return el ? <EditeurEleve eleve={el} autres={t.eleves.filter(x => x.id !== el.id)} onFini={async () => { setEdite(null); await charger(); }} onErreur={setMsg} /> : null;
@@ -432,7 +442,12 @@ function VueTableau({ moi, onAVerifier, allerA, actif }: { moi: Moi; onAVerifier
             <thead>
               <tr>
                 <th rowSpan={2} className="fixe triable" onClick={() => trier("__nom")} title="Classer par nom">Élève{fleche("__nom")}</th>
-                {apps.map(a => <th key={a.id} colSpan={a.exercices.length} className="groupe">{a.nom}</th>)}
+                {apps.map(a => {
+                  const limite = t?.classesApps?.[a.id]?.length ? classes.filter(c => t.classesApps![a.id].includes(cleCl(c))).join(", ") || "aucune" : "";
+                  return <th key={a.id} colSpan={a.exercices.length} className="groupe">{a.nom}
+                    <button className="classes-app" title="Choisir les classes pour lesquelles cette application (ou une de ses colonnes) s'affiche" onClick={() => setClassesDe(a.id)}>
+                      {limite ? `Classes : ${limite}` : "Classes ▾"}</button></th>;
+                })}
               </tr>
               <tr>{apps.flatMap(a => a.exercices.map(x => {
                 const cle = `${a.id}:${x.id}`;
@@ -508,6 +523,53 @@ function CaseNote({ initiale, onValider, onAnnuler }: { initiale: string; onVali
   };
   return <input className="note" autoFocus enterKeyHint="next" inputMode="decimal" placeholder="/20" value={v} onChange={ev => setV(ev.target.value)} onBlur={() => valider(false)}
     onKeyDown={ev => { if (ev.key === "Enter" || ev.key === "Tab") { ev.preventDefault(); valider(true); } if (ev.key === "Escape") { fini.current = true; onAnnuler(); } }} />;
+}
+
+/** Classes pour lesquelles une application, ou chacune de ses colonnes, s'affiche dans le tableau (rien de coché à part : toutes). */
+function ChoixClassesApp({ app, applications, onApp, classes, reglage, onChanger, onFermer }: {
+  app: Tableau["applications"][number]; applications: Tableau["applications"]; onApp: (id: string) => void; classes: string[]; reglage: Record<string, string[]>;
+  onChanger: (cle: string, classes: string[]) => void; onFermer: () => void;
+}) {
+  const cles = classes.map(cleCl);
+  const deApp = reglage[app.id]?.length ? reglage[app.id] : null;
+  const lignes = [{ cle: app.id, titre: "Toute l'application", propre: deApp }, ...app.exercices.map(x => {
+    const cle = `${app.id}:${x.id}`;
+    return { cle, titre: x.titre, propre: reglage[cle]?.length ? reglage[cle] : null };
+  })];
+  const basculer = (cle: string, actuelles: string[], c: string) => {
+    const liste = actuelles.filter(x => cles.includes(x));
+    const nouvelle = liste.includes(c) ? liste.filter(x => x !== c) : [...liste, c];
+    // Toutes cochées : aucune restriction ; aucune cochée : « aucune » (clé qu'aucune vraie classe n'a).
+    onChanger(cle, nouvelle.length === cles.length ? [] : nouvelle.length ? nouvelle : ["aucune"]);
+  };
+  return (
+    <div className="carte classes-apps">
+      <div className="barre">
+        <strong>Classes concernées :</strong>
+        <select value={app.id} onChange={e => onApp(e.target.value)}>{applications.map(a => <option key={a.id} value={a.id}>{a.nom}</option>)}</select>
+        <button className="lien" onClick={onFermer}>Fermer</button>
+      </div>
+      <p className="petit">Décochez les classes qui ne sont pas concernées : leurs élèves n'auront pas cette colonne (ni dans le tableau, ni pour les familles).
+        Une colonne suit le choix de l'application, sauf si vous la réglez à part.</p>
+      <div className="defile">
+        <table className="tableau">
+          <thead><tr><th></th>{classes.map(c => <th key={c}>{c}</th>)}<th></th></tr></thead>
+          <tbody>
+            {lignes.map((l, i) => {
+              const actuelles = l.propre || (i > 0 && deApp) || cles;
+              return (
+                <tr key={l.cle} className={i === 0 ? "toute-app" : ""}>
+                  <td className="fixe">{l.titre}</td>
+                  {cles.map((c, j) => <td key={c}><input type="checkbox" aria-label={`${l.titre} : ${classes[j]}`} checked={actuelles.includes(c)} onChange={() => basculer(l.cle, actuelles, c)} /></td>)}
+                  <td>{l.propre && <button className="lien" onClick={() => onChanger(l.cle, [])}>{i === 0 ? "toutes" : "comme l'application"}</button>}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 const cleCl = (s: string) => sansAccent(s).replace(/[^a-z0-9]/g, "").replace(/^(\d+)(ieme|eme|em|e)?/, "$1");

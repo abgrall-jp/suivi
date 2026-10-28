@@ -45,6 +45,7 @@ export type Tableau = {
   eleves: { id: string; classe: string; nom: string; prenom: string; resultats: Record<string, { percent: number; score: string; at: number | null; manuelle?: boolean }>; autres?: Record<string, { percent: number; score: string; at: number | null; manuelle?: boolean }> }[];
   aVerifier: number;
   masquees: string[];
+  classesApps?: Record<string, string[]>;
   publiees?: Record<string, string>;
   lu: number;
 };

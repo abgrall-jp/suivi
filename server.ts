@@ -519,6 +519,19 @@ async function calculerTableauSansMemo(e: Enseignant, frais = false) {
     }
     essais.set(m.refId, parExo);
   }
+  // Classes choisies par l'enseignant pour une colonne ou une application entière (aucune : toutes) :
+  // la colonne n'apparaît que pour les élèves de ces classes.
+  const classesApps = lireClassesApps(fe);
+  if (Object.keys(classesApps).length) {
+    const classeRef = new Map(refs.map(r => [r.id, cleClasse(r.classe)]));
+    for (const [refId, parExo] of essais) {
+      const cl = classeRef.get(refId) || "";
+      for (const cle of Object.keys(parExo)) {
+        const permises = classesApps[cle] || classesApps[cle.split(":")[0]];
+        if (permises && !permises.includes(cl)) delete parExo[cle];
+      }
+    }
+  }
   // Note qui compte dans une colonne : la note saisie, sauf si l'élève a fait mieux ensuite ; sinon le dernier essai.
   const plusRecent = (liste: Resultat[]) => essaiQuiCompte(liste)!;
   derniersConnus.set(e.uid, {
@@ -534,6 +547,7 @@ async function calculerTableauSansMemo(e: Enseignant, frais = false) {
     })),
     aVerifier: resultat.filter(r => (r.statut === "a_verifier" || r.statut === "aucun") && !exclu({ id: "", nom: r.nom, prenom: "", classe: r.classe })).length,
     masquees: Array.isArray(fe.colonnesMasquees) ? fe.colonnesMasquees.map(String) as string[] : [],
+    classesApps,
   };
 }
 
@@ -574,6 +588,7 @@ app.get("/api/tableau", exigerEnseignant(), route(async (req, res) => {
     })),
     aVerifier: t.aVerifier,
     masquees: t.masquees,
+    classesApps: t.classesApps,
     publiees: Object.fromEntries((await db.collection("publications").where("uid", "==", ensDe(req).uid).get()).docs
       .filter(d => d.get("type") === "tableau").map(d => [String(d.get("classe")), String(d.get("publieLe"))])),
     lu: Date.now(),
@@ -869,6 +884,24 @@ app.post("/api/eleves/fusionner", exigerEnseignant(), route(async (req, res) => 
   }
   await lot.commit();
   res.json({ ok: true, comptes: comptes.length });
+}));
+
+/** Classes (clés « 5b ») pour lesquelles une application (« evalia ») ou une colonne (« evalia:exo ») est affichée ; absente ou vide : toutes. */
+function lireClassesApps(f: any): Record<string, string[]> {
+  const x = f?.classesApps && typeof f.classesApps === "object" ? f.classesApps : {};
+  return Object.fromEntries(Object.entries<any>(x).filter(([cle, v]) => appParId(cle.split(":")[0]) && Array.isArray(v) && v.length).map(([cle, v]) => [cle, v.map(String)]));
+}
+
+app.post("/api/classes-apps", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  // Une application entière (« evalia ») ou une seule de ses colonnes (« evalia:exo »).
+  const cle = String(req.body?.cle ?? req.body?.app ?? "").slice(0, 300);
+  const [appId, ...exo] = cle.split(":");
+  if (!appParId(appId) || (exo.length && !exo.join(":"))) throw httpError(400, "Application inconnue.");
+  const classes = Array.from(new Set((Array.isArray(req.body?.classes) ? req.body.classes : []).map((c: unknown) => cleClasse(String(c ?? ""))).filter(Boolean))).slice(0, 200);
+  await fiche(e);
+  await db.doc(`enseignants/${e.uid}`).set({ classesApps: { [cle]: classes } }, { merge: true });
+  res.json({ ok: true, classes });
 }));
 
 // Colonnes du tableau que l'enseignant a masquées (« app:exercice »).

@@ -170,3 +170,7 @@ button.lien-nom:hover { text-decoration: underline; }
 .ajout-retrait { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
 .ajout-retrait .choix-eleve { flex: 1 1 260px; }
 .ajout-retrait .choix-eleve input { width: 100%; }
+.groupe .classes-app { display: block; margin: 2px auto 0; font-size: 0.75em; font-weight: normal; padding: 1px 6px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.classes-apps .tableau td, .classes-apps .tableau th { text-align: center; }
+.classes-apps .tableau td.fixe { text-align: left; max-width: 320px; }
+.classes-apps .toute-app td { font-weight: bold; background: #f4f1ff; }
