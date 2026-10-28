@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { colonnesManuelles, dateDansTrimestre, lireNote, moyenne, noteSur20, periodesParDefaut } from "./bulletin.ts";
+import { colonnesManuelles, dateDansTrimestre, essaiQuiCompte, lireNote, moyenne, noteSur20, periodesParDefaut } from "./bulletin.ts";
 
 test("trimestres de l'année scolaire", () => {
   assert.deepEqual(periodesParDefaut(new Date("2026-10-24")), {
@@ -48,4 +48,12 @@ test("note saisie à la main : comptée dans la moyenne et repérée", () => {
   const d = dateDansTrimestre(T1, Date.parse("2027-01-15"));
   assert.equal(noteSur20({ x: [{ percent: 100, at: d }] }, ["x"], T1), 20);
   assert.equal(dateDansTrimestre(T1, Date.parse("2026-10-10")), Date.parse("2026-10-10"));
+});
+
+test("note saisie remplacée seulement si l'élève fait mieux ensuite", () => {
+  const m = { percent: 60, at: 100, manuelle: true };
+  assert.equal(essaiQuiCompte([m, { percent: 80, at: 200 }])?.percent, 80); // mieux, après : remplace
+  assert.equal(essaiQuiCompte([m, { percent: 40, at: 200 }])?.percent, 60); // moins bien, après : la note saisie reste
+  assert.equal(essaiQuiCompte([{ percent: 90, at: 50 }, m])?.percent, 60); // mieux, mais avant la saisie : la note saisie compte
+  assert.equal(essaiQuiCompte([{ percent: 30, at: 50 }, { percent: 70, at: 60 }])?.percent, 70); // sans saisie : le dernier essai
 });

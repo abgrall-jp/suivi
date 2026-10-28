@@ -37,9 +37,23 @@ export function lireCoef(v: unknown): number {
 /** Essai retenu pour une colonne : le dernier fait pendant le trimestre (un essai sans date compte toujours). */
 export function essaiRetenu(essais: Essai[] | undefined, periode: { debut: string; fin: string }): Essai | null {
   const { debut, fin } = bornes(periode);
-  const dansPeriode = (essais || []).filter(e => e.at === null || (e.at >= debut && e.at <= fin));
-  if (!dansPeriode.length) return null;
-  return dansPeriode.reduce((m, x) => ((x.at ?? 0) >= (m.at ?? 0) ? x : m));
+  return essaiQuiCompte((essais || []).filter(e => e.at === null || (e.at >= debut && e.at <= fin)));
+}
+
+const plusRecent = <T extends Essai>(liste: T[]) => liste.reduce((m, x) => ((x.at ?? 0) >= (m.at ?? 0) ? x : m));
+
+/**
+ * Essai qui compte parmi ceux d'une colonne. La note saisie à la main par l'enseignant compte, sauf si l'élève a
+ * fait mieux ensuite dans l'application : ce résultat plus récent et meilleur la remplace.
+ * Sans note saisie : le dernier essai.
+ */
+export function essaiQuiCompte<T extends Essai>(essais: T[]): T | null {
+  if (!essais.length) return null;
+  const manuelles = essais.filter(e => e.manuelle), appli = essais.filter(e => !e.manuelle);
+  if (!manuelles.length || !appli.length) return plusRecent(essais);
+  const m = plusRecent(manuelles);
+  const meilleurEnsuite = appli.filter(e => (e.at ?? 0) > (m.at ?? 0) && e.percent > m.percent);
+  return meilleurEnsuite.length ? plusRecent(meilleurEnsuite) : m;
 }
 
 const sur20 = (percent: number) => Math.round(Math.max(0, Math.min(100, percent)) / 5 * 10) / 10;

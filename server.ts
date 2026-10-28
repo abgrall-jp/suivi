@@ -13,7 +13,7 @@ import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, normalis
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
 import { noteDeResultat, trimestresCommences } from "./lib/sequenceur.ts";
 import { plansDe, remarquesParEleve, type PlanPublie, type RemarqueEleve } from "./lib/planclasse.ts";
-import { colonnesManuelles, dateDansTrimestre, dateValide, essaiRetenu, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
+import { colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essaiRetenu, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
 
 // ---------------------------------------------------------------------------
 // Serveur de Suivi, le suivi global des applications Je peux apprendre (hébergement o2switch).
@@ -329,6 +329,10 @@ async function rapprocher(lignes: { app: Application; d: Donnees }[]) {
 const app = express();
 app.set("trust proxy", true);
 app.use(express.json({ limit: "2mb" }));
+app.use((req, res, next) => {
+  if (req.method !== "GET" && req.path.startsWith("/api/") && !req.path.startsWith("/api/famille")) res.on("finish", () => memoTableau.clear());
+  next();
+});
 
 app.get("/api/health", route(async (req, res) => {
   const out: any = { status: "ok", version: APP_VERSION };
@@ -471,7 +475,19 @@ async function connus(e: Enseignant) {
 }
 
 /** Résultats de l'enseignant rangés par élève de référence (le plus récent essai pour chaque exercice). */
-async function calculerTableau(e: Enseignant, frais = false) {
+// Tableau calculé gardé 60 secondes par enseignant : changer d'onglet ne relit pas tout. Toute modification
+// (requête autre qu'une lecture) l'efface, pour que la page suivante montre la modification.
+const memoTableau = new Map<string, { at: number; p: ReturnType<typeof calculerTableauSansMemo> }>();
+function calculerTableau(e: Enseignant, frais = false) {
+  const m = memoTableau.get(e.uid);
+  if (m && !frais && Date.now() - m.at < 60e3) return m.p;
+  const p = calculerTableauSansMemo(e, frais);
+  memoTableau.set(e.uid, { at: Date.now(), p });
+  p.catch(() => { if (memoTableau.get(e.uid)?.p === p) memoTableau.delete(e.uid); });
+  return p;
+}
+
+async function calculerTableauSansMemo(e: Enseignant, frais = false) {
   const lus = await lireApplications(e, frais);
   const ok = lus.filter((l): l is { app: Application; d: Donnees; erreur: null } => !!l.d);
   const rap = await rapprocher(ok);
@@ -503,7 +519,8 @@ async function calculerTableau(e: Enseignant, frais = false) {
     }
     essais.set(m.refId, parExo);
   }
-  const plusRecent = (liste: Resultat[]) => liste.reduce((m, x) => ((x.at || 0) >= (m.at || 0) ? x : m));
+  // Note qui compte dans une colonne : la note saisie, sauf si l'élève a fait mieux ensuite ; sinon le dernier essai.
+  const plusRecent = (liste: Resultat[]) => essaiQuiCompte(liste)!;
   derniersConnus.set(e.uid, {
     at: Date.now(), refs,
     colonnes: new Set(ok.flatMap(({ app: a, d }) => d.exercises.map(x => `${a.id}:${x.id}`))),

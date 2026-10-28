@@ -30,6 +30,9 @@ function Enseignants() {
   const [moi, setMoi] = useState<Moi | null>(null);
   const [erreur, setErreur] = useState("");
   const [onglet, setOnglet] = useState<Onglet>("tableau");
+  // Le tableau et le bulletin restent en mémoire quand on change d'onglet : y revenir est immédiat (ils se relisent en silence).
+  const [bulletinVu, setBulletinVu] = useState(false);
+  useEffect(() => { if (onglet === "bulletin") setBulletinVu(true); }, [onglet]);
   const [aVerifier, setAVerifier] = useState(0);
   const [pp, setPp] = useState<{ classes: { cle: string; nom: string }[]; gerees: { cle: string; nom: string }[]; periodes: any } | null>(null);
 
@@ -73,8 +76,8 @@ function Enseignants() {
         <span className="moi">{moi.email} <button className="lien" onClick={deconnexion}>Déconnexion</button></span>
       </header>
       <main>
-        {onglet === "tableau" && <VueTableau moi={moi} onAVerifier={setAVerifier} allerA={setOnglet} />}
-        {onglet === "bulletin" && <VueBulletin />}
+        <div hidden={onglet !== "tableau"}><VueTableau moi={moi} onAVerifier={setAVerifier} allerA={setOnglet} actif={onglet === "tableau"} /></div>
+        {bulletinVu && <div hidden={onglet !== "bulletin"}><VueBulletin actif={onglet === "bulletin"} /></div>}
         {onglet === "familles" && <VueCodesFamille />}
         {onglet === "pp" && pp && <VueProfPrincipal classes={pp.classes} periodes={pp.periodes} />}
         {onglet === "parents" && pp && <VueParents classes={pp.gerees} />}
@@ -282,7 +285,7 @@ type Tri = { cle: string; sens: 1 | -1 } | null;
 const couleur = (p: number) => (p >= 75 ? "tres-bien" : p >= 50 ? "bien" : p >= 25 ? "moyen" : "faible");
 const dateCourte = (t: number | null) => (t ? new Date(t).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "");
 
-function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: number) => void; allerA: (o: Onglet) => void }) {
+function VueTableau({ moi, onAVerifier, allerA, actif }: { moi: Moi; onAVerifier: (n: number) => void; allerA: (o: Onglet) => void; actif: boolean }) {
   const [t, setT] = useState<Tableau | null>(null);
   const [msg, setMsg] = useState("");
   const [classe, setClasse] = useState("");
@@ -290,6 +293,9 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
   const [tri, setTri] = useState<Tri>(null);
   const [voirMasquees, setVoirMasquees] = useState(false);
   const defile = useRef<HTMLDivElement>(null);
+  const actifRef = useRef(actif);
+  // Retour sur l'onglet : relecture discrète (les données affichées restent visibles pendant ce temps).
+  useEffect(() => { if (actif && !actifRef.current) charger(false, true); actifRef.current = actif; }, [actif]); // eslint-disable-line react-hooks/exhaustive-deps
   const [saisie, setSaisie] = useState<string | null>(null); // case en cours de saisie : « refId|colonne »
   const [edite, setEdite] = useState<string | null>(null); // élève dont on corrige le nom ou qu'on fusionne
 
@@ -300,7 +306,7 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
   // Mise à jour toutes les 30 secondes, tant que la page est visible.
   useEffect(() => {
     charger();
-    const id = setInterval(() => { if (document.visibilityState === "visible") charger(false, true); }, 30000);
+    const id = setInterval(() => { if (document.visibilityState === "visible" && actifRef.current) charger(false, true); }, 30000);
     return () => clearInterval(id);
   }, [charger]);
 
@@ -448,7 +454,7 @@ function VueTableau({ moi, onAVerifier, allerA }: { moi: Moi; onAVerifier: (n: n
                       title={r ? `${r.manuelle ? "Saisie à la main" : r.score} · ${dateCourte(r.at)}\nCliquer pour corriger` : "Cliquer pour saisir une note sur 20"}>
                       {r ? <>{r.score && <span className="note">{r.score.replace(/\s*\/\s*/, "/")}</span>}{Math.round(r.percent)} %</> : ""}
                       {e.autres?.[cle] && <span className={`autre-note ${e.autres[cle].manuelle ? "manuelle-legende" : "appli"}`}
-                        title={e.autres[cle].manuelle ? "Note saisie à la main, plus ancienne : elle ne compte pas" : "Note de l'application, plus ancienne que la note saisie : elle ne compte pas"}>
+                        title={e.autres[cle].manuelle ? "Note saisie à la main : l'élève a fait mieux ensuite dans l'application, elle ne compte plus" : "Note de l'application : c'est la note saisie à la main qui compte"}>
                         {e.autres[cle].manuelle ? e.autres[cle].score : `${Math.round(e.autres[cle].percent)} %`}</span>}</td>;
                   }))}
                 </tr>

@@ -45,7 +45,7 @@ function ChoixPeriode({ periodes, trimestre, setTrimestre, classes, classe, setC
 }
 
 // --- Bulletin de l'enseignant ----------------------------------------------------------------
-export function VueBulletin() {
+export function VueBulletin({ actif = true }: { actif?: boolean }) {
   const [b, setB] = useState<Bulletin | null>(null);
   const [trimestre, setTrimestre] = useState<Trimestre | null>(null);
   const [classe, setClasse] = useState("");
@@ -64,6 +64,9 @@ export function VueBulletin() {
     } catch (e: any) { setMsg(e.message); }
   }, [trimestre, classe]);
   useEffect(() => { charger(); }, [charger]);
+  // Retour sur l'onglet : relecture discrète.
+  const etaitActif = useRef(actif);
+  useEffect(() => { if (actif && !etaitActif.current) charger(true); etaitActif.current = actif; }, [actif]); // eslint-disable-line react-hooks/exhaustive-deps
   // Après une saisie, la page change tout de suite ; le bulletin (moyennes) est relu discrètement 3 secondes après la dernière.
   const relecture = useRef<number | undefined>(undefined);
   const relireBientot = () => { window.clearTimeout(relecture.current); relecture.current = window.setTimeout(() => charger(true), 3000); };
@@ -127,7 +130,7 @@ export function VueBulletin() {
       {pret && (
         <>
           {!b.studioRelie && <p className="petit">Pour voir ici les appréciations écrites dans le Studio d'Appréciations, reliez-le dans « Mes applications ».</p>}
-          <p className="petit">Chaque colonne montre la note sur 20 du dernier essai du trimestre ; la moyenne calculée en tient compte avec les coefficients. Une note perdue ou absente ? Écrivez-la dans la case : elle apparaît <span className="manuelle-legende">en violet</span>. Si une case a deux notes (celle de l'application et celle saisie), la plus récente compte, l'autre est affichée à côté en petit. Écrivez une note définitive, ou cliquez sur « Figer les notes » : elle ne sera plus mise à jour par le logiciel, mais vous pourrez toujours la changer.</p>
+          <p className="petit">Chaque colonne montre la note sur 20 du dernier essai du trimestre ; la moyenne calculée en tient compte avec les coefficients. Une note perdue ou absente ? Écrivez-la dans la case : elle apparaît <span className="manuelle-legende">en violet</span>. Si une case a deux notes (celle de l'application et celle saisie), c'est la note saisie qui compte, sauf si l'élève a fait mieux ensuite dans l'application ; l'autre est affichée à côté en petit. Écrivez une note définitive, ou cliquez sur « Figer les notes » : elle ne sera plus mise à jour par le logiciel, mais vous pourrez toujours la changer.</p>
           <div className="defile">
             <table className="tableau bulletin">
               <thead><tr>
@@ -190,9 +193,9 @@ export function VueBulletin() {
 function AutreNote({ autre, onEffacer }: { autre?: { note: number | null; manuelle: boolean }; onEffacer: () => void }) {
   if (!autre || autre.note === null) return null;
   return autre.manuelle
-    ? <span className="autre-note manuelle-legende" title="Note saisie à la main, plus ancienne que celle de l'application : elle ne compte pas">{note(autre.note)}
+    ? <span className="autre-note manuelle-legende" title="Note saisie à la main : l'élève a fait mieux ensuite dans l'application, elle ne compte plus">{note(autre.note)}
       <button className="lien" title="Effacer la note saisie" onClick={onEffacer}>✕</button></span>
-    : <span className="autre-note appli" title="Note de l'application, plus ancienne que la note saisie : elle ne compte pas">{note(autre.note)}</span>;
+    : <span className="autre-note appli" title="Note de l'application : c'est la note saisie à la main qui compte">{note(autre.note)}</span>;
 }
 
 /** Entrée : enregistre la case et passe à la même colonne de l'élève suivant. */

@@ -104,11 +104,11 @@ await p.screenshot({ path: `${OUT}/7-mobile.png` });
 await p.setViewportSize({ width: 1280, height: 800 });
 // Espace des familles : publication, codes, vue de la famille.
 await p.click('nav button:has-text("Tableau")');
-await p.selectOption('.barre select', { label: '5e B' });
+await p.selectOption('section:visible .barre select', { label: '5e B' });
 await p.click('button:has-text("Publier pour les familles")');
 await p.waitForSelector('text=publié le');
 await p.click('nav button:has-text("Familles")');
-await p.selectOption('.barre select', { label: '5e B' });
+await p.selectOption('section:visible .barre select', { label: '5e B' });
 await p.fill('input[placeholder^="Mot de passe de classe"]', 'Classe-5B');
 await p.click('button:has-text("Créer les fiches")');
 await p.waitForSelector('.fiche-code');
