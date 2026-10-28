@@ -172,5 +172,6 @@ button.lien-nom:hover { text-decoration: underline; }
 .ajout-retrait .choix-eleve input { width: 100%; }
 .groupe .classes-app { display: block; margin: 2px auto 0; font-size: 0.75em; font-weight: normal; padding: 1px 6px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .classes-apps .tableau td, .classes-apps .tableau th { text-align: center; }
-.classes-apps .tableau td.fixe { text-align: left; max-width: 320px; }
-.classes-apps .toute-app td { font-weight: bold; background: #f4f1ff; }
+.classes-apps .tableau td.fixe { text-align: left; min-width: 220px; max-width: 360px; white-space: normal; overflow-wrap: anywhere; line-height: 1.3; }
+.classes-apps .tableau td { vertical-align: middle; }
+.classes-apps .toute-app td { font-weight: bold; background: var(--fond); color: var(--texte); }

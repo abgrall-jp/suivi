@@ -545,11 +545,11 @@ function ChoixClassesApp({ app, applications, onApp, classes, reglage, onChanger
   return (
     <div className="carte classes-apps">
       <div className="barre">
-        <strong>Classes concernées :</strong>
+        <strong>Application concernée :</strong>
         <select value={app.id} onChange={e => onApp(e.target.value)}>{applications.map(a => <option key={a.id} value={a.id}>{a.nom}</option>)}</select>
         <button className="lien" onClick={onFermer}>Fermer</button>
       </div>
-      <p className="petit">Décochez les classes qui ne sont pas concernées : leurs élèves n'auront pas cette colonne (ni dans le tableau, ni pour les familles).
+      <p className="petit">Pour l'application choisie, décochez les classes qui ne sont pas concernées : leurs élèves n'auront pas cette colonne (ni dans le tableau, ni pour les familles).
         Une colonne suit le choix de l'application, sauf si vous la réglez à part.</p>
       <div className="defile">
         <table className="tableau">
