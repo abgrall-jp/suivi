@@ -175,3 +175,9 @@ button.lien-nom:hover { text-decoration: underline; }
 .classes-apps .tableau td.fixe { text-align: left; min-width: 220px; max-width: 360px; white-space: normal; overflow-wrap: anywhere; line-height: 1.3; }
 .classes-apps .tableau td { vertical-align: middle; }
 .classes-apps .toute-app td { font-weight: bold; background: var(--fond); color: var(--texte); }
+/* Bulletin : lignes plus serrées et en-têtes plus courts, pour voir plus d'élèves et de notes à la fois. */
+.bulletin td { padding: 3px 6px; }
+.bulletin input.note { padding: 2px 4px; width: 56px; }
+.bulletin th.exo { min-width: 84px; max-width: 130px; }
+.tableau th .ligne-col { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.2; }
+.tableau th .titre-col { -webkit-line-clamp: 4; }

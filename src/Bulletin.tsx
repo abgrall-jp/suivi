@@ -50,6 +50,7 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
   const [trimestre, setTrimestre] = useState<Trimestre | null>(null);
   const [classe, setClasse] = useState("");
   const [msg, setMsg] = useState("");
+  const defile = useRef<HTMLDivElement>(null);
   const [info, setInfo] = useState("");
   const [reglage, setReglage] = useState(false);
 
@@ -108,6 +109,8 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
     a.click();
   };
 
+  const decaler = (sens: number) => defile.current?.scrollBy({ left: sens * Math.max(300, defile.current.clientWidth * 0.7), behavior: "smooth" });
+
   return (
     <section>
       <div className="barre">
@@ -119,6 +122,7 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
           try { const r = await api<{ figees: number }>("/api/bulletin/figer", { trimestre, classe }); setInfo(`${r.figees} note${r.figees > 1 ? "s" : ""} figée${r.figees > 1 ? "s" : ""}.`); charger(); } catch (e: any) { setMsg(e.message); }
         }}>Figer les notes</button>}
         {pret && <button onClick={exporter}>Exporter (tableur)</button>}
+        {pret && <span className="defilement"><button title="Voir les colonnes de gauche" onClick={() => decaler(-1)}>◀</button><button title="Voir les colonnes de droite" onClick={() => decaler(1)}>▶</button></span>}
         {pret && <BoutonPublier publieLe={b.publieLe || null}
           onPublier={async () => { try { await api("/api/publier/bulletin", { trimestre, classe }); setInfo("Bulletin publié : chaque élève et ses parents voient leur ligne dans l'espace Famille."); await charger(); } catch (e: any) { setMsg(e.message); } }}
           onRetirer={async () => { try { await api("/api/publier/bulletin", { trimestre, classe, retirer: true }); await charger(); } catch (e: any) { setMsg(e.message); } }} />}
@@ -130,8 +134,8 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
       {pret && (
         <>
           {!b.studioRelie && <p className="petit">Pour voir ici les appréciations écrites dans le Studio d'Appréciations, reliez-le dans « Mes applications ».</p>}
-          <p className="petit">Chaque colonne montre la note sur 20 du dernier essai du trimestre ; la moyenne calculée en tient compte avec les coefficients. Une note perdue ou absente ? Écrivez-la dans la case : elle apparaît <span className="manuelle-legende">en violet</span>. Si une case a deux notes (celle de l'application et celle saisie), c'est la note saisie qui compte, sauf si l'élève a fait mieux ensuite dans l'application ; l'autre est affichée à côté en petit. Écrivez une note définitive, ou cliquez sur « Figer les notes » : elle ne sera plus mise à jour par le logiciel, mais vous pourrez toujours la changer.</p>
-          <div className="defile">
+          <details className="petit aide-bulletin"><summary>Comment sont calculées les notes ?</summary>Chaque colonne montre la note sur 20 du dernier essai du trimestre ; la moyenne calculée en tient compte avec les coefficients. Une note perdue ou absente ? Écrivez-la dans la case : elle apparaît <span className="manuelle-legende">en violet</span>. Si une case a deux notes (celle de l'application et celle saisie), c'est la note saisie qui compte, sauf si l'élève a fait mieux ensuite dans l'application ; l'autre est affichée à côté en petit. Écrivez une note définitive, ou cliquez sur « Figer les notes » : elle ne sera plus mise à jour par le logiciel, mais vous pourrez toujours la changer.</details>
+          <div className="defile" ref={defile}>
             <table className="tableau bulletin">
               <thead><tr>
                 <th className="fixe">Élève</th>

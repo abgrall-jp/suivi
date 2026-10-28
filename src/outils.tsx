@@ -7,5 +7,6 @@ export const sansAccent = (s: string) => String(s || "").normalize("NFD").replac
 export function EnteteColonne({ titre }: { titre: string }) {
   const morceaux = titre.split(" · ").filter(Boolean);
   if (morceaux.length < 2) return <span className="titre-col seul">{titre}</span>;
-  return <>{morceaux.map((m, i) => <span key={i} className={i === morceaux.length - 1 ? "titre-col" : "ligne-col"}>{m}</span>)}</>;
+  // Le début (matière, niveau, séquence, semaine) tient sur une ligne, pour laisser la place au titre.
+  return <><span className="ligne-col">{morceaux.slice(0, -1).join(" · ")}</span><span className="titre-col">{morceaux[morceaux.length - 1]}</span></>;
 }
