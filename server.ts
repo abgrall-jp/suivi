@@ -538,16 +538,18 @@ async function calculerTableauSansMemo(e: Enseignant, frais = false) {
 }
 
 /** Exclusions de l'enseignant : identifiants d'élèves et classes (clé « 5b »). */
-function lireExclus(f: any): { eleves: string[]; classes: string[] } {
+function lireExclus(f: any): { eleves: string[]; classes: string[]; inclus: string[] } {
   const x = f?.exclus || {};
-  return { eleves: Array.isArray(x.eleves) ? x.eleves.map(String) : [], classes: Array.isArray(x.classes) ? x.classes.map(String) : [] };
+  const liste = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
+  return { eleves: liste(x.eleves), classes: liste(x.classes), inclus: liste(x.inclus) };
 }
 /** Comptes de test (« Test Prof », « Élève test », classe « classe-test ») : jamais suivis. */
 const estTest = (...textes: string[]) => textes.some(t => /(^| )tests?( |$)/.test(normaliser(t)));
 function estExclu(f: any) {
   const x = lireExclus(f);
-  const eleves = new Set(x.eleves), classes = new Set(x.classes);
-  return (r: EleveRef) => eleves.has(r.id) || classes.has(cleClasse(r.classe)) || estTest(r.nom, r.prenom, r.classe);
+  const eleves = new Set(x.eleves), classes = new Set(x.classes), inclus = new Set(x.inclus);
+  // Élève ajouté à la main (« Ajouter un élève ») : suivi même si sa classe est décochée ou si c'est un compte de test.
+  return (r: EleveRef) => !inclus.has(r.id) && (eleves.has(r.id) || classes.has(cleClasse(r.classe)) || estTest(r.nom, r.prenom, r.classe));
 }
 
 const parNom = (a: EleveRef, b: EleveRef) => a.classe.localeCompare(b.classe, "fr") || a.nom.localeCompare(b.nom, "fr") || a.prenom.localeCompare(b.prenom, "fr");
@@ -806,7 +808,7 @@ app.get("/api/correspondances", exigerEnseignant(), route(async (req, res) => {
   res.json({
     provisoire,
     exclus: lireExclus(f),
-    references: refs.map(r => ({ id: r.id, classe: r.classe, nom: r.nom, prenom: r.prenom })),
+    references: refs.map(r => ({ id: r.id, classe: r.classe, nom: r.nom, prenom: r.prenom, suivi: !exclu(r) })),
     eleves: resultat.map(r => ({ ...r, appNom: appParId(r.app)?.nom || r.app, exclu: exclu({ id: r.refId || "", nom: r.nom, prenom: "", classe: r.classe }) })),
   });
 }));
@@ -821,6 +823,7 @@ app.post("/api/correspondances", exigerEnseignant(), route(async (req, res) => {
   if (!f.apps?.[a.id]?.email) throw httpError(403, "Reliez d'abord cette application.");
   const d = await donnees(a, f.apps[a.id].email);
   if (!d.students.some(s => s.id === studentId)) throw httpError(404, "Cet élève n'est pas dans vos classes.");
+  if (req.body?.oublier) { await db.doc(`correspondances/${cleCorr(a.id, studentId)}`).delete(); return res.json({ ok: true }); }
   if (refId !== null) {
     const refs = await elevesReference();
     if (refs.length && !refs.some(r => r.id === refId)) throw httpError(400, "Élève de référence inconnu.");
@@ -882,7 +885,7 @@ app.post("/api/exclus", exigerEnseignant(), route(async (req, res) => {
   const e = ensDe(req);
   const liste = (v: unknown, max: number, f: (x: string) => string) =>
     Array.from(new Set((Array.isArray(v) ? v : []).map(x => f(String(x ?? "")).slice(0, 200)).filter(Boolean))).slice(0, max);
-  const exclus = { eleves: liste(req.body?.eleves, 3000, x => x), classes: liste(req.body?.classes, 200, cleClasse) };
+  const exclus = { eleves: liste(req.body?.eleves, 3000, x => x), classes: liste(req.body?.classes, 200, cleClasse), inclus: liste(req.body?.inclus, 3000, x => x) };
   await fiche(e);
   await db.doc(`enseignants/${e.uid}`).set({ exclus }, { merge: true });
   res.json({ ok: true, exclus });

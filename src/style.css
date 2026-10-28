@@ -167,3 +167,6 @@ button.lien-nom:hover { text-decoration: underline; }
 .editeur-eleve { margin: 12px 0; padding: 16px; }
 .editeur-eleve .ligne { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin-top: 10px; }
 .editeur-eleve label { display: flex; flex-direction: column; font-size: 13px; gap: 2px; }
+.ajout-retrait { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+.ajout-retrait .choix-eleve { flex: 1 1 260px; }
+.ajout-retrait .choix-eleve input { width: 100%; }

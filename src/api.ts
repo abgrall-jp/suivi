@@ -50,7 +50,7 @@ export type Tableau = {
 };
 export type Correspondances = {
   provisoire: boolean;
-  exclus: { eleves: string[]; classes: string[] };
-  references: { id: string; classe: string; nom: string; prenom: string }[];
+  exclus: { eleves: string[]; classes: string[]; inclus?: string[] };
+  references: { id: string; classe: string; nom: string; prenom: string; suivi?: boolean }[];
   eleves: { app: string; appNom: string; studentId: string; nom: string; classe: string; statut: "confirme" | "auto" | "a_verifier" | "aucun" | "ignore"; refId: string | null; candidats: string[]; exclu?: boolean }[];
 };

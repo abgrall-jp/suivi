@@ -561,7 +561,7 @@ function VueCorrespondances({ onChange }: { onChange: (n: number) => void }) {
   const choisir = async (app: string, studentId: string, refId: string | null) => {
     try { await api("/api/correspondances", { app, studentId, refId }); charger(); } catch (e: any) { setMsg(e.message); }
   };
-  const exclure = async (x: { eleves: string[]; classes: string[] }) => {
+  const exclure = async (x: { eleves: string[]; classes: string[]; inclus?: string[] }) => {
     try { await api("/api/exclus", x); charger(); } catch (e: any) { setMsg(e.message); }
   };
 
@@ -574,6 +574,13 @@ function VueCorrespondances({ onChange }: { onChange: (n: number) => void }) {
     .sort((a, b) => ordre.indexOf(a.statut) - ordre.indexOf(b.statut) || a.classe.localeCompare(b.classe, "fr") || a.nom.localeCompare(b.nom, "fr"));
   const classes = Array.from(new Map(c.references.map(r => [cleCl(r.classe), r.classe])).entries()).sort((a, b) => a[1].localeCompare(b[1], "fr", { numeric: true }));
   const exclus = c.exclus.eleves.map(id => refDe.get(id) || { id, nom: id, prenom: "", classe: "" });
+  // Élèves qu'on peut ajouter au suivi : ceux des applications qui ne sont pas suivis (retirés, classe décochée, compte de test),
+  // et ceux qu'on avait marqués « ignoré » dans les noms.
+  const ignores = c.eleves.filter(e => e.statut === "ignore").map(e => ({ id: `ignore:${e.app}:${e.studentId}`, app: e.app, studentId: e.studentId, nom: e.nom, prenom: "", classe: e.classe }));
+  const aAjouter: Ref[] = [...c.references.filter(r => r.suivi === false), ...ignores.map(({ id, nom, prenom, classe }) => ({ id, nom, prenom, classe }))];
+  const choisirOubli = async (app: string, studentId: string) => {
+    try { await api("/api/correspondances", { app, studentId, oublier: true }); charger(); } catch (e: any) { setMsg(e.message); }
+  };
 
   return (
     <section>
@@ -598,8 +605,27 @@ function VueCorrespondances({ onChange }: { onChange: (n: number) => void }) {
             </label>
           ))}
         </div>
-        <ChoixEleve refs={c.references.filter(r => !c.exclus.eleves.includes(r.id))} placeholder="Retirer un élève : tapez les premières lettres"
-          onChoix={r => exclure({ ...c.exclus, eleves: [...c.exclus.eleves, r.id] })} />
+        <div className="ajout-retrait">
+          <ChoixEleve refs={c.references.filter(r => r.suivi !== false)} placeholder="Retirer un élève : tapez les premières lettres"
+            onChoix={r => exclure({ ...c.exclus, eleves: [...c.exclus.eleves, r.id], inclus: (c.exclus.inclus || []).filter(x => x !== r.id) })} />
+          <ChoixEleve refs={aAjouter} placeholder="Ajouter un élève : tapez les premières lettres" onChoix={async r => {
+            const ignore = ignores.find(x => x.id === r.id);
+            if (ignore) { await choisirOubli(ignore.app, ignore.studentId); return; }
+            const ref = refDe.get(r.id);
+            // Retiré à la main : il suffit de le remettre ; classe décochée ou compte de test : ajouté à la main.
+            const forcer = !!ref && (c.exclus.classes.includes(cleCl(ref.classe)) || !c.exclus.eleves.includes(r.id));
+            exclure({ ...c.exclus, eleves: c.exclus.eleves.filter(x => x !== r.id), inclus: forcer ? [...(c.exclus.inclus || []), r.id] : c.exclus.inclus || [] });
+          }} />
+        </div>
+        {!!c.exclus.inclus?.length && (
+          <div className="etiquettes">
+            <span className="petit">Élèves ajoutés :</span>
+            {c.exclus.inclus.map(id => refDe.get(id) || { id, nom: id, prenom: "", classe: "" }).map(r => (
+              <span key={r.id} className="etiquette">{nomComplet(r)}{r.classe ? ` (${r.classe})` : ""}{" "}
+                <button className="lien" onClick={() => exclure({ ...c.exclus, inclus: (c.exclus.inclus || []).filter(x => x !== r.id) })}>enlever</button></span>
+            ))}
+          </div>
+        )}
         {!!exclus.length && (
           <div className="etiquettes">
             <span className="petit">Élèves retirés :</span>
