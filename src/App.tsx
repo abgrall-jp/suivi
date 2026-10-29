@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { auth, connexionEmail, connexionGoogle, deconnexion, inscriptionEmail, motDePasseOublie } from "./firebase.ts";
 import { api, suivreChargements, type Correspondances, type Moi, type Tableau } from "./api.ts";
@@ -426,7 +426,11 @@ function VueTableau({ moi, onAVerifier, allerA, actif }: { moi: Moi; onAVerifier
       })()}
       {edite && t && (() => {
         const el = t.eleves.find(x => x.id === edite);
-        return el ? <EditeurEleve eleve={el} autres={t.eleves.filter(x => x.id !== el.id)} onFini={async () => { setEdite(null); await charger(); }} onErreur={setMsg} /> : null;
+        return el ? <EditeurEleve eleve={el} autres={t.eleves.filter(x => x.id !== el.id)} onFini={async () => { setEdite(null); await charger(); }} onErreur={setMsg}
+          publication={<span className="ligne"><span className="petit">Résultats de cet élève seulement, pour sa famille :</span>
+            <BoutonPublier eleve publieLe={t.publieesEleves?.[el.id] || null}
+              onPublier={async () => { try { await api("/api/publier/tableau", { classe: el.classe, refId: el.id }); await charger(); } catch (e: any) { setMsg(e.message); } }}
+              onRetirer={async () => { try { await api("/api/publier/tableau", { classe: el.classe, refId: el.id, retirer: true }); await charger(); } catch (e: any) { setMsg(e.message); } }} /></span>} /> : null;
       })()}
       {t?.applications.filter(a => a.erreur).map(a => <p key={a.id} className="alerte">{a.nom} : {a.erreur}</p>)}
       {t && t.aVerifier > 0 && (
@@ -483,7 +487,7 @@ function VueTableau({ moi, onAVerifier, allerA, actif }: { moi: Moi; onAVerifier
 }
 
 /** Corriger le nom d'un élève (inverser nom et prénom) ou le fusionner avec un autre (le même élève, écrit autrement). */
-function EditeurEleve({ eleve, autres, onFini, onErreur }: { eleve: Ref; autres: Ref[]; onFini: () => void; onErreur: (m: string) => void }) {
+function EditeurEleve({ eleve, autres, onFini, onErreur, publication }: { eleve: Ref; autres: Ref[]; onFini: () => void; onErreur: (m: string) => void; publication?: ReactNode }) {
   const [prenom, setPrenom] = useState(eleve.prenom);
   const [nom, setNom] = useState(eleve.nom);
   const [occupe, setOccupe] = useState(false);
@@ -511,6 +515,7 @@ function EditeurEleve({ eleve, autres, onFini, onErreur }: { eleve: Ref; autres:
             faire(() => api("/api/eleves/fusionner", { de: eleve.id, vers: r.id }));
         }} />
       </div>
+      {publication}
       <div className="comptes-relies">
         <span className="petit">Comptes des applications reliés à cet élève {corr === null ? "(chargement…)" : comptes.length ? "" : ": aucun"}</span>
         {comptes.map(x => (

@@ -47,6 +47,7 @@ export type Tableau = {
   masquees: string[];
   classesApps?: Record<string, string[]>;
   publiees?: Record<string, string>;
+  publieesEleves?: Record<string, string>;
   lu: number;
 };
 export type Correspondances = {

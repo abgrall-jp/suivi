@@ -319,13 +319,13 @@ export function VueCodesFamille() {
 }
 
 /** Bouton « Publier pour les familles » : copie ce que le professeur voit, pour cette classe, dans l'espace des familles. */
-export function BoutonPublier({ publieLe, onPublier, onRetirer }: { publieLe: string | null; onPublier: () => Promise<void>; onRetirer: () => Promise<void> }) {
+export function BoutonPublier({ publieLe, onPublier, onRetirer, eleve }: { publieLe: string | null; onPublier: () => Promise<void>; onRetirer: () => Promise<void>; eleve?: boolean }) {
   const [occupe, setOccupe] = useState(false);
   const faire = async (fn: () => Promise<void>) => { setOccupe(true); try { await fn(); } finally { setOccupe(false); } };
   return (
     <span className="publier">
       <button disabled={occupe} title="Les élèves et les parents voient seulement leur propre ligne, telle qu'elle est maintenant." onClick={() => faire(onPublier)}>
-        {publieLe ? "Republier pour les familles" : "Publier pour les familles"}
+        {eleve ? (publieLe ? "Republier pour sa famille" : "Publier pour sa famille") : publieLe ? "Republier pour les familles" : "Publier pour les familles"}
       </button>
       {publieLe && <span className="petit">publié le {new Date(publieLe).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} · <button className="lien" disabled={occupe} onClick={() => { if (confirm("Retirer cette publication ? Les familles ne la verront plus.")) faire(onRetirer); }}>retirer</button></span>}
     </span>

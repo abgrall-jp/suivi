@@ -14,7 +14,7 @@ type LigneBulletin = {
 };
 type Bulletin = {
   periodes: Periodes; classes: { cle: string; nom: string }[]; colonnesDispo: Colonne[];
-  colonnes?: Colonne[]; externes?: Externe[]; eleves?: LigneBulletin[]; studioRelie?: boolean; publieLe?: string | null;
+  colonnes?: Colonne[]; externes?: Externe[]; eleves?: LigneBulletin[]; studioRelie?: boolean; publieLe?: string | null; publieesEleves?: Record<string, string>;
 };
 
 const TRIMESTRES: Trimestre[] = ["T1", "T2", "T3"];
@@ -152,7 +152,10 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
               <tbody>
                 {b.eleves!.map(e => (
                   <tr key={e.id}>
-                    <td className="fixe"><span className="nom">{e.nom} {e.prenom}</span></td>
+                    <td className="fixe"><span className="nom">{e.nom} {e.prenom}</span>
+                      <span className="publier-eleve"><BoutonPublier eleve publieLe={b.publieesEleves?.[e.id] || null}
+                        onPublier={async () => { try { await api("/api/publier/bulletin", { trimestre, classe, refId: e.id }); await charger(); } catch (err: any) { setMsg(err.message); } }}
+                        onRetirer={async () => { try { await api("/api/publier/bulletin", { trimestre, classe, refId: e.id, retirer: true }); await charger(); } catch (err: any) { setMsg(err.message); } }} /></span></td>
                     {colonnes.map(c => {
                       const manuelle = !!e.manuelles?.includes(c.cle);
                       return <td key={c.cle} className={manuelle ? "manuelle" : ""} title={manuelle ? "Note saisie à la main" : "Note des applications (saisir une note pour la remplacer)"}>

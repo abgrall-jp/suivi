@@ -632,8 +632,13 @@ app.get("/api/tableau", exigerEnseignant(), route(async (req, res) => {
     aVerifier: t.aVerifier,
     masquees: t.masquees,
     classesApps: t.classesApps,
-    publiees: Object.fromEntries((await db.collection("publications").where("uid", "==", ensDe(req).uid).get()).docs
-      .filter(d => d.get("type") === "tableau").map(d => [String(d.get("classe")), String(d.get("publieLe"))])),
+    ...await (async () => {
+      const pubs = (await db.collection("publications").where("uid", "==", ensDe(req).uid).get()).docs.map(d => d.data()).filter(d => d.type === "tableau");
+      return {
+        publiees: Object.fromEntries(pubs.filter(d => !d.eleve).map(d => [String(d.classe), String(d.publieLe)])),
+        publieesEleves: Object.fromEntries(pubs.filter(d => d.eleve).map(d => [String(d.eleve), String(d.publieLe)])),
+      };
+    })(),
     lu: Date.now(),
   });
 }));
@@ -725,6 +730,8 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
     periodes: per, classes, colonnesDispo, trimestre, classe,
     colonnes, externes, eleves, studioRelie: !!f.apps?.appreciations,
     publieLe: (await db.doc(`publications/${e.uid}__bulletin__${trimestre}__${classe}`).get()).get("publieLe") || null,
+    publieesEleves: Object.fromEntries((await db.collection("publications").where("uid", "==", e.uid).get()).docs.map(d => d.data())
+      .filter(d => d.type === "bulletin" && d.eleve && d.trimestre === trimestre && d.classe === classe).map(d => [String(d.eleve), String(d.publieLe)])),
   });
 }));
 
@@ -1143,15 +1150,33 @@ const nomEnseignant = async (e: Enseignant) => {
   return (e.nom.includes("@") || e.nom === e.email.split("@")[0]) && nomAppli ? String(nomAppli) : e.nom;
 };
 
+const lireEleveSeul = (body: any) => {
+  const id = body?.refId === undefined || body?.refId === null ? "" : String(body.refId).slice(0, 200);
+  if (id.includes("/")) throw httpError(400, "Élève incorrect.");
+  return id;
+};
+/** Publications vues par une famille : pour un même enseignant, une même classe (et un même trimestre), la plus récente
+ *  entre celle de la classe et celle publiée pour l'élève seul. */
+function plusRecentes(docs: any[]) {
+  const garde = new Map<string, any>();
+  for (const d of docs) {
+    const k = `${d.type}|${d.uid}|${d.classe}|${d.trimestre || ""}`;
+    if (!garde.has(k) || String(d.publieLe) > String(garde.get(k).publieLe)) garde.set(k, d);
+  }
+  return Array.from(garde.values());
+}
+
 app.post("/api/publier/tableau", exigerEnseignant(), route(async (req, res) => {
   const e = ensDe(req);
   const classe = cleClasse(String(req.body?.classe || ""));
   if (!classe || classe.length > 40) throw httpError(400, "Choisissez d'abord une classe.");
-  const ref = db.doc(`publications/${e.uid}__tableau__${classe}`);
+  // Un seul élève (refId) : sa publication est à part, et la plus récente des deux est celle que voit la famille.
+  const seul = lireEleveSeul(req.body);
+  const ref = db.doc(`publications/${e.uid}__tableau__${classe}${seul ? `__eleve__${seul}` : ""}`);
   if (req.body?.retirer) { await ref.delete(); return res.json({ ok: true }); }
   const t = await calculerTableau(e, true);
-  const eleves = elevesSuivis(t, classe);
-  if (!eleves.length) throw httpError(404, "Aucun élève suivi dans cette classe.");
+  const eleves = elevesSuivis(t, classe).filter(r => !seul || r.id === seul);
+  if (!eleves.length) throw httpError(404, seul ? "Cet élève n'est pas suivi dans cette classe." : "Aucun élève suivi dans cette classe.");
   const colonnes = t.applications.flatMap(a => a.exercices.map(x => ({ cle: `${a.id}:${x.id}`, app: a.nom, titre: x.titre })))
     .filter(c => !t.masquees.includes(c.cle) && eleves.some(r => t.essais.get(r.id)?.[c.cle]?.length));
   const lignes: Record<string, Record<string, { percent: number; score: string; manuelle?: boolean }>> = {};
@@ -1164,7 +1189,7 @@ app.post("/api/publier/tableau", exigerEnseignant(), route(async (req, res) => {
   }
   const publieLe = new Date().toISOString();
   await ref.set({
-    type: "tableau", uid: e.uid, enseignant: await nomEnseignant(e), classe, classeNom: eleves[0].classe, publieLe,
+    type: "tableau", uid: e.uid, enseignant: await nomEnseignant(e), classe, classeNom: eleves[0].classe, publieLe, ...(seul ? { eleve: seul } : {}),
     colonnes, lignes, refIds: eleves.map(r => r.id), noms: Object.fromEntries(eleves.map(r => [r.id, { nom: r.nom, prenom: r.prenom, classe: r.classe }])),
   });
   res.json({ ok: true, publieLe, eleves: eleves.length, colonnes: colonnes.length });
@@ -1173,13 +1198,15 @@ app.post("/api/publier/tableau", exigerEnseignant(), route(async (req, res) => {
 app.post("/api/publier/bulletin", exigerEnseignant(), route(async (req, res) => {
   const e = ensDe(req);
   const { trimestre, classe } = lireTrimestreClasse(req.body);
-  const ref = db.doc(`publications/${e.uid}__bulletin__${trimestre}__${classe}`);
+  const seul = lireEleveSeul(req.body);
+  const ref = db.doc(`publications/${e.uid}__bulletin__${trimestre}__${classe}${seul ? `__eleve__${seul}` : ""}`);
   if (req.body?.retirer) { await ref.delete(); return res.json({ ok: true }); }
   const b = (await db.doc(`bulletins/${idBulletin(e.uid, trimestre, classe)}`).get()).data();
   if (!b?.colonnes?.length) throw httpError(409, "Choisissez d'abord les notes à reprendre.");
   const per = await periodes();
   const t = await calculerTableau(e, true);
-  const refs = elevesDeClasse(t, classe);
+  const refs = elevesDeClasse(t, classe).filter(r => !seul || r.id === seul);
+  if (seul && !refs.length) throw httpError(404, "Cet élève n'est pas dans cette classe.");
   const colonnes = (b.colonnes as any[]).map(c => ({ cle: String(c.cle), titre: String(c.titre || ""), coef: lireCoef(c.coef) }));
   const externes: { id: string; titre: string }[] = Array.isArray(b.externes) ? b.externes : [];
   const eleves: Record<string, any> = {};
@@ -1196,7 +1223,7 @@ app.post("/api/publier/bulletin", exigerEnseignant(), route(async (req, res) => 
   }
   const publieLe = new Date().toISOString();
   await ref.set({
-    type: "bulletin", uid: e.uid, enseignant: await nomEnseignant(e), trimestre, classe, classeNom: refs[0]?.classe || classe, publieLe,
+    type: "bulletin", uid: e.uid, enseignant: await nomEnseignant(e), trimestre, classe, classeNom: refs[0]?.classe || classe, publieLe, ...(seul ? { eleve: seul } : {}),
     colonnes, externes, eleves, refIds: refs.map(r => r.id), noms: Object.fromEntries(refs.map(r => [r.id, { nom: r.nom, prenom: r.prenom, classe: r.classe }])),
   });
   res.json({ ok: true, publieLe, eleves: refs.length });
@@ -1411,7 +1438,7 @@ app.get("/api/famille", route(async (req, res) => {
   const refId = lu && !lu.startsWith("changer:") ? lu : null;
   if (!refId) throw httpError(401, "Connectez-vous avec votre identifiant.");
   const snap = await db.collection("publications").where("refIds", "array-contains", refId).get();
-  const docs = snap.docs.map(d => d.data());
+  const docs = plusRecentes(snap.docs.map(d => d.data()));
   const nom = docs.map(d => d.noms?.[refId]).find(Boolean) || null;
   const tableaux = docs.filter(d => d.type === "tableau").map(d => ({
     enseignant: d.enseignant, classe: d.classeNom, publieLe: d.publieLe,
@@ -1561,11 +1588,12 @@ app.get("/api/sequenceur/eleve", exigerSequenceur(), route(async (req, res) => {
     const essais = t.essais.get(ref.id) || {};
     const docs = await db.getAll(...trimestres.flatMap(tr => [
       db.doc(`bulletins/${idBulletin(e.uid, tr, classe)}`), db.doc(`publications/${e.uid}__bulletin__${tr}__${classe}`),
+      db.doc(`publications/${e.uid}__bulletin__${tr}__${classe}__eleve__${ref.id}`),
     ]));
     trimestres.forEach((tr, i) => {
-      const b = docs[2 * i].data();
+      const b = docs[3 * i].data();
       if (!b?.colonnes?.length) return;
-      const pub = docs[2 * i + 1].data();
+      const pub = plusRecentes([docs[3 * i + 1].data(), docs[3 * i + 2].data()].filter(Boolean))[0];
       const colonnes = (b.colonnes as any[]).map(c => ({ cle: String(c.cle), app: String(c.app || ""), titre: String(c.titre || ""), coef: lireCoef(c.coef) }));
       const finale = b.eleves?.[ref.id]?.finale;
       bulletins.push({

@@ -184,3 +184,6 @@ button.lien-nom:hover { text-decoration: underline; }
 .comptes-relies { margin: 8px 0; display: flex; flex-direction: column; gap: 4px; }
 .comptes-relies .ligne { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .comptes-relies .choix-eleve { flex: 1 1 240px; }
+.publier-eleve { display: block; margin-top: 2px; }
+.publier-eleve .publier button:not(.lien) { font-size: 11px; padding: 1px 6px; }
+.publier-eleve .publier .petit { display: block; font-size: 10px; }
