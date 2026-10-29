@@ -464,6 +464,47 @@ async function notesManuelles(uid: string) {
   return snap.docs.map(d => d.data()).filter(d => d.refId && d.notes && typeof d.notes === "object");
 }
 
+/**
+ * Colonne renommée par son application (ex. Séquenceur : « SNT~seconde~1~5 » devenue « Technologie~seconde~1~5 »
+ * quand la classe change de discipline) : les notes saisies à la main et les colonnes du bulletin suivent la nouvelle colonne.
+ * Une ancienne colonne inconnue est rattachée à la seule colonne actuelle de la même application qui ne diffère que par
+ * ce qui précède le premier « ~ ». Rien n'est fait s'il y a plusieurs candidates ou aucune.
+ */
+async function rattacherColonnesRenommees(uid: string, manuelles: any[], actuelles: Set<string>) {
+  const inconnues = new Set(manuelles.flatMap(m => Object.keys(m.notes)).filter(c => !actuelles.has(c)));
+  const fin = (cle: string) => { const i = cle.indexOf(":"), j = cle.indexOf("~", i); return i > 0 && j > i ? `${cle.slice(0, i)}:${cle.slice(j)}` : null; };
+  const parFin = new Map<string, string[]>();
+  for (const c of actuelles) { const f = fin(c); if (f) parFin.set(f, [...(parFin.get(f) || []), c]); }
+  const renommees = new Map<string, string>();
+  for (const c of inconnues) { const f = fin(c), cand = f ? parFin.get(f) : undefined; if (cand?.length === 1) renommees.set(c, cand[0]); }
+  if (!renommees.size) return;
+  const lot = db.batch();
+  for (const m of manuelles) {
+    if (!Object.keys(m.notes).some(c => renommees.has(c))) continue;
+    const notes: Record<string, any> = {};
+    for (const [c, n] of Object.entries<any>(m.notes)) {
+      const nouvelle = renommees.get(c);
+      // Une note déjà saisie dans la nouvelle colonne l'emporte ; l'ancienne reste alors sous son ancien nom.
+      if (nouvelle && !(nouvelle in m.notes)) notes[nouvelle] = n; else notes[c] = n;
+    }
+    m.notes = notes;
+    lot.update(db.doc(`notesManuelles/${idNotesManuelles(uid, m.refId)}`), { notes });
+  }
+  const bulletins = await db.collection("bulletins").where("uid", "==", uid).get();
+  for (const d of bulletins.docs) {
+    const colonnes = Array.isArray(d.get("colonnes")) ? d.get("colonnes") : [];
+    if (!colonnes.some((c: any) => renommees.has(c?.cle))) continue;
+    const deja = new Set(colonnes.map((c: any) => c?.cle));
+    lot.update(d.ref, { colonnes: colonnes.flatMap((c: any) => {
+      const nouvelle = renommees.get(c?.cle);
+      if (!nouvelle) return [c];
+      return deja.has(nouvelle) ? [] : [{ ...c, cle: nouvelle }];
+    }) });
+  }
+  await lot.commit();
+  console.log(`Colonnes renommées rattachées (${uid}) :`, Object.fromEntries(renommees));
+}
+
 // Élèves et colonnes du dernier tableau calculé pour chaque enseignant : sert à vérifier une saisie (note, ligne du bulletin)
 // sans relire toutes les applications à chaque fois.
 const derniersConnus = new Map<string, { at: number; refs: EleveRef[]; colonnes: Set<string> }>();
@@ -510,7 +551,9 @@ async function calculerTableauSansMemo(e: Enseignant, frais = false) {
     }
   }
   // Les notes saisies à la main comptent comme un essai de plus, à la date retenue.
-  for (const m of await notesManuelles(e.uid)) {
+  const manuelles = await notesManuelles(e.uid);
+  await rattacherColonnesRenommees(e.uid, manuelles, new Set(ok.flatMap(({ app: a, d }) => d.exercises.map(x => `${a.id}:${x.id}`))));
+  for (const m of manuelles) {
     if (!gardes.has(m.refId)) continue;
     const parExo = essais.get(m.refId) || {};
     for (const [cle, n] of Object.entries<any>(m.notes)) {

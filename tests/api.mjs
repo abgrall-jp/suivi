@@ -139,6 +139,17 @@ await jean('/api/bulletin/colonnes', { trimestre: 'T1', classe: '5e B', colonnes
 const studio = getFirestore(adm, 'ai-studio-f415485f-4d6c-4b39-a9de-42a310ca2292');
 for (const d of (await studio.collection('appreciations').get()).docs) await d.ref.delete();
 const uidJean = (await getAuth(adm).getUserByEmail('jean@ecole.fr')).uid;
+
+console.log('Colonne renommée par son application');
+await db.doc(`notesManuelles/${uidJean}__5b_durand_alice`).set({ uid: uidJean, refId: '5b_durand_alice', notes: { 'textetrous:SNT~2de~1~5': { note: 16, at: Date.parse('2026-10-02T10:00:00Z'), le: '2026-10-02' } } }, { merge: true });
+await db.doc(`bulletins/${uidJean}__T3__5b`).set({ uid: uidJean, trimestre: 'T3', classe: '5b', colonnes: [{ cle: 'textetrous:SNT~2de~1~5', app: 'Texte à trous', titre: 'Ancienne', coef: 2 }] });
+tab = (await jean('/api/tableau?frais=1')).data;
+t('note saisie dans l’ancienne colonne : rattachée à la colonne renommée', tab.eleves.find(e => e.id === '5b_durand_alice')?.resultats['textetrous:Techno~2de~1~5']?.manuelle === true, tab.eleves.find(e => e.id === '5b_durand_alice')?.resultats);
+const mRen = (await db.doc(`notesManuelles/${uidJean}__5b_durand_alice`).get()).data();
+t('ancienne clé remplacée dans la base', !!mRen.notes['textetrous:Techno~2de~1~5'] && !mRen.notes['textetrous:SNT~2de~1~5'], mRen.notes);
+const bRen = (await db.doc(`bulletins/${uidJean}__T3__5b`).get()).data();
+t('colonne du bulletin rattachée, coefficient gardé', bRen.colonnes.length === 1 && bRen.colonnes[0].cle === 'textetrous:Techno~2de~1~5' && bRen.colonnes[0].coef === 2, bRen.colonnes);
+await db.doc(`bulletins/${uidJean}__T3__5b`).delete();
 await studio.collection('appreciations').add({ teacherId: uidJean, studentName: 'Alice Durand', text: 'Alice participe beaucoup.', term: 'Trimestre 1', mode: 'teacher_discipline', timestamp: new Date('2026-10-10') });
 await studio.collection('appreciations').add({ teacherId: uidJean, studentName: 'Alice Durand', text: 'Je dois relire mes leçons.', term: 'Trimestre 1', mode: 'student', timestamp: new Date('2026-10-11') });
 await studio.collection('appreciations').add({ teacherId: 'quelqu-un-d-autre', studentName: 'Bob Leroy', text: 'Pas à Jean.', term: 'Trimestre 1', mode: 'teacher_class', timestamp: new Date() });
