@@ -490,6 +490,10 @@ function EditeurEleve({ eleve, autres, onFini, onErreur }: { eleve: Ref; autres:
   const boite = useRef<HTMLDivElement>(null);
   useEffect(() => { boite.current?.scrollIntoView({ behavior: "smooth", block: "center" }); }, [eleve.id]);
   const faire = async (fn: () => Promise<unknown>) => { setOccupe(true); try { await fn(); onFini(); } catch (e: any) { onErreur(e.message); } finally { setOccupe(false); } };
+  // Comptes des applications reliés à cet élève : une erreur d'association se corrige ici.
+  const [corr, setCorr] = useState<Correspondances | null>(null);
+  useEffect(() => { api<Correspondances>("/api/correspondances", undefined, true).then(setCorr).catch(() => setCorr(null)); }, [eleve.id]);
+  const comptes = (corr?.eleves || []).filter(x => x.refId === eleve.id);
   return (
     <div className="carte editeur-eleve" ref={boite}>
       <strong>{eleve.nom} {eleve.prenom}</strong> <span className="petit">({eleve.classe})</span>
@@ -506,6 +510,19 @@ function EditeurEleve({ eleve, autres, onFini, onErreur }: { eleve: Ref; autres:
           if (confirm(`Fusionner « ${eleve.nom} ${eleve.prenom} » avec « ${r.nom} ${r.prenom} » ? Ses résultats passent sur ${r.prenom || r.nom}. Rien ne change dans les applications.`))
             faire(() => api("/api/eleves/fusionner", { de: eleve.id, vers: r.id }));
         }} />
+      </div>
+      <div className="comptes-relies">
+        <span className="petit">Comptes des applications reliés à cet élève {corr === null ? "(chargement…)" : comptes.length ? "" : ": aucun"}</span>
+        {comptes.map(x => (
+          <div key={`${x.app}:${x.studentId}`} className="ligne">
+            <span><strong>{x.appNom}</strong> : {x.nom} {x.classe && <span className="petit">({x.classe})</span>}</span>
+            <ChoixEleve refs={(corr?.references || []).filter(r => r.id !== eleve.id)} placeholder="Ce n'est pas lui ? Relier à un autre élève…" onChoix={r => {
+              if (confirm(`Relier le compte « ${x.nom} » (${x.appNom}) à ${r.nom} ${r.prenom} (${r.classe}) ?`)) faire(() => api("/api/correspondances", { app: x.app, studentId: x.studentId, refId: r.id }));
+            }} />
+            <button className="lien" disabled={occupe} title="Oublier ce choix : Suivi relie de nouveau ce compte tout seul, d'après le nom et la classe"
+              onClick={() => faire(() => api("/api/correspondances", { app: x.app, studentId: x.studentId, oublier: true }))}>délier</button>
+          </div>
+        ))}
       </div>
       <p className="petit">La correction et la fusion valent dans Suivi seulement (tableau, bulletin, familles) : les applications d'origine ne sont pas modifiées.</p>
     </div>
@@ -611,6 +628,7 @@ function VueCorrespondances({ onChange }: { onChange: (n: number) => void }) {
   const [c, setC] = useState<Correspondances | null>(null);
   const [msg, setMsg] = useState("");
   const [tous, setTous] = useState(false);
+  const [cherche, setCherche] = useState("");
 
   const charger = useCallback(async () => {
     try {
@@ -632,7 +650,11 @@ function VueCorrespondances({ onChange }: { onChange: (n: number) => void }) {
   const nomRef = (id: string) => { const r = refDe.get(id); return r ? `${nomComplet(r)} (${r.classe})` : id; };
   const ordre = ["a_verifier", "aucun", "ignore", "confirme", "auto"];
   const classeExclue = (classe: string) => c.exclus.classes.includes(cleCl(classe));
-  const lignes = c.eleves.filter(e => (tous || e.statut === "a_verifier" || e.statut === "aucun") && !classeExclue(e.classe) && (tous || !e.exclu))
+  // Une recherche montre aussi les élèves reconnus : c'est ainsi qu'on retrouve une association à corriger.
+  const motsCherches = sansAccent(cherche).split(/\s+/).filter(Boolean);
+  const voirTous = tous || motsCherches.length > 0;
+  const lignes = c.eleves.filter(e => (voirTous || e.statut === "a_verifier" || e.statut === "aucun") && !classeExclue(e.classe) && (voirTous || !e.exclu)
+    && motsCherches.every(m => sansAccent(`${e.nom} ${e.classe} ${e.refId ? nomRef(e.refId) : ""}`).includes(m)))
     .sort((a, b) => ordre.indexOf(a.statut) - ordre.indexOf(b.statut) || a.classe.localeCompare(b.classe, "fr") || a.nom.localeCompare(b.nom, "fr"));
   const classes = Array.from(new Map(c.references.map(r => [cleCl(r.classe), r.classe])).entries()).sort((a, b) => a[1].localeCompare(b[1], "fr", { numeric: true }));
   const exclus = c.exclus.eleves.map(id => refDe.get(id) || { id, nom: id, prenom: "", classe: "" });
@@ -648,6 +670,7 @@ function VueCorrespondances({ onChange }: { onChange: (n: number) => void }) {
     <section>
       <div className="barre">
         <h2>Noms des élèves</h2>
+        <input type="search" placeholder="Chercher un élève (même reconnu) pour corriger son association" value={cherche} onChange={e => setCherche(e.target.value)} />
         <label className="petit"><input type="checkbox" checked={tous} onChange={e => setTous(e.target.checked)} /> Montrer aussi les élèves reconnus</label>
       </div>
 

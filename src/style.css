@@ -181,3 +181,6 @@ button.lien-nom:hover { text-decoration: underline; }
 .bulletin th.exo { min-width: 84px; max-width: 130px; }
 .tableau th .ligne-col { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.2; }
 .tableau th .titre-col { -webkit-line-clamp: 4; }
+.comptes-relies { margin: 8px 0; display: flex; flex-direction: column; gap: 4px; }
+.comptes-relies .ligne { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.comptes-relies .choix-eleve { flex: 1 1 240px; }

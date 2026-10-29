@@ -68,6 +68,7 @@ await p.waitForSelector('th.exo:has-text("Le présent")');
 await p.click('.classes-apps button:has-text("Fermer")');
 await p.click('table.tableau button.lien-nom:has-text("Bob")');
 await p.waitForSelector('.editeur-eleve');
+await p.waitForSelector('.comptes-relies .ligne:has-text("Texte à trous")');
 await p.click('.editeur-eleve button:has-text("Inverser")');
 await p.screenshot({ path: `${OUT}/6c-corriger-nom.png` });
 await p.click('.editeur-eleve button:has-text("Fermer")');
