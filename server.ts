@@ -1331,6 +1331,34 @@ const enfantPour = async (refId: string, sec: string) => {
 };
 const MDP_MIN = 8;
 
+// Applications dont le mot de passe élève ouvre aussi l'espace Famille (le Séquenceur ; réglable pour les essais).
+const APPS_MDP_ELEVE = (process.env.SUIVI_MDP_APPS || "sequenceur").split(",").map(x => x.trim()).filter(Boolean);
+/**
+ * Mot de passe de l'élève dans une application (le Séquenceur) : l'application le vérifie par sa porte (/api/suivi/verifier-eleve).
+ * L'élève est retrouvé chez son enseignant (choisi dans l'accueil), ou chez tous les enseignants si l'accueil ne l'a pas donné.
+ * Les parents utilisent le même mot de passe : c'est à l'élève de le leur transmettre.
+ */
+async function verifierParApplication(refId: string, mdp: string, uid: string) {
+  if (!mdp) return false;
+  const ens = uid ? [await db.doc(`enseignants/${uid}`).get()] : (await db.collection("enseignants").get()).docs;
+  for (const doc of ens) {
+    const f = doc.data() || {};
+    for (const id of APPS_MDP_ELEVE) {
+      const a = appParId(id);
+      const email = a ? f.apps?.[a.id]?.email : null;
+      if (!a || !email || !parPorte(a) || !cleDe(a)) continue;
+      try {
+        const { resultat } = await rapprocher([{ app: a, d: await donnees(a, email) }]);
+        for (const studentId of new Set(resultat.filter(r => r.refId === refId).map(r => r.studentId))) {
+          const r = await porte(a, "/api/suivi/verifier-eleve", { email, studentId, code: mdp });
+          if (r?.ok === true) return true;
+        }
+      } catch (err: any) { console.error(`Vérification du mot de passe dans ${a.nom} :`, err?.message || err); }
+    }
+  }
+  return false;
+}
+
 app.post("/api/famille/connexion", route(async (req, res) => {
   essaiFamille(String(req.ip), req.body?.refId ?? req.body?.identifiant ?? req.body?.email);
   const sec = await secret();
@@ -1341,13 +1369,15 @@ app.post("/api/famille/connexion", route(async (req, res) => {
     const mdp = String(req.body?.motDePasse || "").trim();
     const refId = choisi && !choisi.includes("/") ? choisi : id ? (await db.doc(`identifiants/${id}`).get()).get("refId") : null;
     const c = refId ? (await db.doc(`codesEleves/${refId}`).get()).data() : null;
-    if (choisi && !c) throw httpError(401, "Pas encore de mot de passe pour cet élève : demandez-le à l'enseignant (onglet « Familles »).");
     if (c?.mdp && correspond(mdp, c.mdp)) return res.json({ enfants: [await enfantPour(refId, sec)] });
+    // Le mot de passe du Séquenceur (élève, et parents avec le même mot de passe).
+    const uid = String(req.body?.enseignant || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 128);
+    if (refId && await verifierParApplication(refId, mdp, uid)) return res.json({ enfants: [await enfantPour(refId, sec)] });
     // Code de départ : accepté seulement tant que l'élève n'a pas choisi son mot de passe.
     if (c && !c.mdp && c.h === empreinteCodeFamille(mdp, sec)) {
       return res.json({ doitChanger: true, jeton: signerJeton(`changer:${refId}`, sec, 30 * 60e3), prenom: (await enfantPour(refId, sec)).prenom });
     }
-    throw httpError(401, "Mot de passe incorrect.");
+    throw httpError(401, "Mot de passe incorrect. C'est le même mot de passe que dans le Séquenceur.");
   }
   const email = String(req.body?.email || "").trim().toLowerCase();
   const mdp = String(req.body?.motDePasse || "").trim();

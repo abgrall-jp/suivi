@@ -289,7 +289,11 @@ t('codes : élèves suivis de la classe, sans code', listeCodes.length === 2 && 
 const ann0 = (await famille('/api/famille/annuaire')).data.enseignants;
 t('accueil : l’enseignant apparaît dès qu’il ouvre son tableau, avant toute fiche', ann0.length === 1 && ann0[0].classes.length === 1, ann0);
 const sansCode = await famille('/api/famille/connexion', null, { refId: '5b_durand_alice', motDePasse: 'nimporte' });
-t('accueil : élève sans mot de passe de départ, message clair', sansCode.status === 401 && /Pas encore de mot de passe/.test(sansCode.data.error), sansCode.data);
+t('accueil : mauvais mot de passe, on rappelle que c’est celui du Séquenceur', sansCode.status === 401 && /Séquenceur/.test(sansCode.data.error), sansCode.data);
+const viaSeq = await famille('/api/famille/connexion', null, { refId: '5b_durand_alice', enseignant: uidJean, motDePasse: 'Seq-Alice-1' });
+t('accueil : le mot de passe de l’application (Séquenceur) ouvre l’espace de l’élève', viaSeq.status === 200 && viaSeq.data.enfants?.[0]?.prenom === 'Alice', viaSeq.data);
+t('accueil : même mot de passe sans enseignant donné (cherché chez tous)', (await famille('/api/famille/connexion', null, { refId: '5b_durand_alice', motDePasse: 'Seq-Alice-1' })).status === 200);
+t('accueil : le mot de passe d’Alice n’ouvre pas le compte de Bob', (await famille('/api/famille/connexion', null, { refId: '5b_leroy_bob', enseignant: uidJean, motDePasse: 'Seq-Alice-1' })).status === 401);
 t('mot de passe de classe trop court : refusé', (await jean('/api/famille/codes', { classe: '5B', motDeClasse: 'abc' })).status === 400);
 const cc = (await jean('/api/famille/codes', { classe: '5B', motDeClasse: 'Classe-5B' })).data;
 t('fiches : identifiant de chaque élève et mot de passe de classe commun', cc.codes.length === 2 && cc.motDeClasse === 'Classe-5B' && cc.codes.every(c => c.code === 'Classe-5B') && cc.codes.find(c => c.id === '5b_durand_alice')?.identifiant === 'alice.durand.5b' && cc.adresse.endsWith('/famille'), cc);

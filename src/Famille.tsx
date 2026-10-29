@@ -80,7 +80,7 @@ function ConnexionFamille({ onOk, onChanger }: { onOk: (e: Enfant[]) => void; on
     ev.preventDefault();
     setMsg(""); setOccupe(true);
     try {
-      const d = await poster("/api/famille/connexion", mode === "liste" ? { refId, motDePasse: mdp } : mode === "identifiant" ? { identifiant, motDePasse: mdp } : { email: email.trim(), motDePasse: mdp });
+      const d = await poster("/api/famille/connexion", mode === "liste" ? { refId, enseignant: ens, motDePasse: mdp } : mode === "identifiant" ? { identifiant, motDePasse: mdp } : { email: email.trim(), motDePasse: mdp });
       if (d.doitChanger) onChanger(d.jeton, d.prenom); else onOk(d.enfants);
     } catch (e: any) { setMsg(e.message); } finally { setOccupe(false); }
   };
@@ -90,6 +90,9 @@ function ConnexionFamille({ onOk, onChanger }: { onOk: (e: Enfant[]) => void; on
       <p className="petit"><a href="/">← Accueil</a></p>
       <h1>{tu ? "Accueil élève" : qui === "parent" ? "Accueil parent" : "Suivi · Famille"}</h1>
       <p>{tu ? "Tes résultats et ton bulletin, publiés par tes enseignants." : "Les résultats et le bulletin publiés par les enseignants."}</p>
+      {mode !== "email" && <p className="alerte">{tu
+        ? "Ton mot de passe est celui du Séquenceur. Si tu ne le connais plus, récupère-le auprès de ton enseignant."
+        : "Le mot de passe est celui de l'élève dans le Séquenceur : c'est le même pour les parents, votre enfant doit vous le transmettre."}</p>}
       <form onSubmit={envoyer}>
         {mode === "liste" && <>
           <label className="etape">1. {tu ? "Ton enseignant" : "L'enseignant"}
@@ -114,14 +117,14 @@ function ConnexionFamille({ onOk, onChanger }: { onOk: (e: Enfant[]) => void; on
         {mode === "identifiant" && <input placeholder="Identifiant (ex. : alice.durand.5b)" value={identifiant} onChange={e => setIdentifiant(e.target.value)} required autoComplete="username" autoCapitalize="off" />}
         {mode === "email" && <input type="email" placeholder="Adresse e-mail" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email" />}
         <label className="etape">{mode === "liste" ? "4. " : ""}Mot de passe
-          <input type="password" placeholder={mode === "email" ? "Mot de passe parent" : "La 1re fois : celui de la classe"} value={mdp} onChange={e => setMdp(e.target.value)} required autoComplete="current-password" />
+          <input type="password" placeholder={mode === "email" ? "Mot de passe parent" : "Mot de passe du Séquenceur"} value={mdp} onChange={e => setMdp(e.target.value)} required autoComplete="current-password" />
         </label>
         <button type="submit" className="principal" disabled={occupe}>Entrer</button>
       </form>
       {msg && <p className="erreur">{msg}</p>}
       <p className="petit">{mode === "email"
         ? <a href="/parents">Mot de passe parent perdu ?</a>
-        : `Mot de passe oublié ? ${tu ? "Demande" : "Demandez"} à l'enseignant un nouveau mot de passe de départ. Les parents utilisent le même mot de passe que l'élève.`}</p>
+        : `Mot de passe oublié ? ${tu ? "Demande" : "Demandez"} à l'enseignant de le retrouver dans le Séquenceur. Les parents utilisent le même mot de passe que l'élève.`}</p>
       <p className="petit">
         {mode !== "liste" && <button className="lien" onClick={() => setMode("liste")}>Choisir l'enseignant, la classe et le nom</button>}
         {mode !== "identifiant" && <button className="lien" onClick={() => setMode("identifiant")}>{tu ? "J'ai un identifiant" : "Avec l'identifiant de la fiche"}</button>}
