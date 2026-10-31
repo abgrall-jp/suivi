@@ -8,6 +8,7 @@ import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { classeEstUnNom, cleClasse, decider, lireListe, normaliser, type EleveRef } from "./lib/correspondance.ts";
 import { APPLICATIONS, type Application } from "./lib/applications.ts";
+import { estRapport, lireSeuils, synthese, type LigneApp } from "./lib/consommation.ts";
 import { correspond, empreinte, genererMotDePasse } from "./lib/parents.ts";
 import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, normaliserCode, signerJeton } from "./lib/famille.ts";
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
@@ -32,10 +33,12 @@ import { colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essai
 //                             (sinon fichier service-account-planclasse.json)
 //   PLANCLASSE_DATABASE_ID    base du Plan de classe IA (sinon plan-classe-eu, celle de la version o2switch)
 //   ADRESSE_PUBLIQUE          adresse de Suivi dans les e-mails (sinon https://suivi.jepeuxapprendre.fr)
+//   SEUIL_IA_PAR_MINUTE, SEUIL_SIMULTANEES, SEUIL_COUT_JOUR, SEUIL_ERREURS_HEURE, PRIX_IA_ENTREE, PRIX_IA_SORTIE
+//                             seuils de l'onglet Consommation (voir lib/consommation.ts) ; alerte à 80 %
 // ---------------------------------------------------------------------------
 
 const PORT = Number(process.env.PORT) || 3000;
-const APP_VERSION = "2026-10-24.1";
+const APP_VERSION = "2026-10-31.1";
 
 function readJsonFile(fileName: string): any {
   try {
@@ -1481,6 +1484,40 @@ app.post("/api/admin/trimestres", exigerEnseignant(), route(async (req, res) => 
   }
   await db.doc("reglages/trimestres").set(p);
   res.json({ ok: true });
+}));
+
+// --- Consommation des applications (administrateur) -------------------------------------------
+// Chaque application reliée donne ses compteurs (appels à l'IA, refus, erreurs) par /api/suivi/consommation,
+// avec sa clé de liaison. Les applications qui n'ont pas encore le fichier conso.cjs sont signalées « compteurs absents ».
+const seuilsConso = lireSeuils(process.env);
+let cacheConso: { at: number; data: any } | null = null;
+let lectureConso: Promise<any> | null = null;
+async function lireConsommation() {
+  const applis = APPLICATIONS.filter(a => parPorte(a) && cleDe(a));
+  const lignes: LigneApp[] = await Promise.all(applis.map(async (a): Promise<LigneApp> => {
+    try {
+      const r = await fetch(urlDe(a) + "/api/suivi/consommation", { headers: { "X-Suivi-Cle": cleDe(a) }, signal: AbortSignal.timeout(8000) });
+      let d: any = null;
+      try { d = await r.json(); } catch {}
+      if (r.ok && estRapport(d)) return { id: a.id, nom: a.nom, etat: "ok", rapport: d };
+      if (r.status === 401) return { id: a.id, nom: a.nom, etat: "erreur", message: "clé de liaison refusée" };
+      if (r.ok || r.status === 404) return { id: a.id, nom: a.nom, etat: "absent" };
+      return { id: a.id, nom: a.nom, etat: "erreur", message: `erreur ${r.status}` };
+    } catch (e: any) {
+      return { id: a.id, nom: a.nom, etat: "erreur", message: e?.name === "TimeoutError" ? "pas de réponse en 8 secondes" : "injoignable (application arrêtée ?)" };
+    }
+  }));
+  const s = synthese(lignes, seuilsConso);
+  return { lu: Date.now(), seuils: seuilsConso, ...s, applications: lignes };
+}
+app.get("/api/admin/consommation", exigerEnseignant(), route(async (req, res) => {
+  if (!ensDe(req).isAdmin) throw httpError(403, "Réservé à l'administrateur.");
+  // Gardé 20 secondes : plusieurs onglets ouverts ne multiplient pas les appels aux applications.
+  if (!cacheConso || Date.now() - cacheConso.at > 20000) {
+    lectureConso ||= lireConsommation().finally(() => { lectureConso = null; });
+    cacheConso = { at: Date.now(), data: await lectureConso };
+  }
+  res.json(cacheConso.data);
 }));
 
 // --- Pages ---------------------------------------------------------------------------------

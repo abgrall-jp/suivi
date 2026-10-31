@@ -187,3 +187,27 @@ button.lien-nom:hover { text-decoration: underline; }
 .publier-eleve { display: block; margin-top: 2px; }
 .publier-eleve .publier button:not(.lien) { font-size: 11px; padding: 1px 6px; }
 .publier-eleve .publier .petit { display: block; font-size: 10px; }
+/* Onglet Consommation (administrateur) */
+:root { --danger-fond: #fde7e5; --attention-fond: #fdf1d8; --barre-ia: #2f5bd3; }
+@media (prefers-color-scheme: dark) { :root { --danger-fond: #4a1f1c; --attention-fond: #4a3a18; --barre-ia: #7c9dff; } }
+.conso .barre h2 { margin-right: auto; }
+.conso-ok { background: var(--vert-fond); color: var(--info); padding: 10px 14px; border-radius: 8px; }
+.conso-alertes { list-style: none; padding: 0; margin: 8px 0 16px; display: flex; flex-direction: column; gap: 6px; }
+.conso-alertes li { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; padding: 8px 12px; border-radius: 8px; }
+.conso-alertes li.danger { background: var(--danger-fond); } .conso-alertes li.attention { background: var(--attention-fond); }
+.conso-tuiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; margin: 12px 0; }
+.conso-tuile { display: flex; flex-direction: column; gap: 2px; background: var(--carte); border: 1px solid var(--bord); border-radius: 10px; padding: 10px 12px; }
+.conso-tuile strong { font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+.conso-tuile.danger { background: var(--danger-fond); } .conso-tuile.attention { background: var(--attention-fond); }
+.conso-graphique { margin: 12px 0; background: var(--carte); border: 1px solid var(--bord); border-radius: 10px; padding: 10px 12px; }
+.conso-graphique figcaption { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.conso-survol { margin-left: auto; font-variant-numeric: tabular-nums; }
+.conso-trace { position: relative; margin-top: 6px; } .conso-trace svg { width: 100%; height: 120px; display: block; }
+.conso-milieu { position: absolute; left: 2px; top: calc(50% - 16px); pointer-events: none; }
+.conso-heures { display: flex; justify-content: space-between; margin-top: 2px; }
+.conso-graphique .barre-ia { fill: var(--barre-ia); opacity: .85; } .conso-graphique .barre-ia.actif { opacity: 1; }
+.conso-graphique .axe { stroke: var(--bord); stroke-width: 1; } .conso-graphique .grille { stroke: var(--bord); stroke-dasharray: 3 3; }
+.conso-graphique .graduation { color: var(--doux); font-size: 11px; }
+.conso-table td { font-variant-numeric: tabular-nums; } .conso-table td.gauche { text-align: left; }
+.conso-table details summary { cursor: pointer; font-weight: 500; } .conso-table details ul { margin: 4px 0; padding-left: 18px; white-space: normal; }
+.conso-table details[open] { white-space: normal; min-width: 280px; }
