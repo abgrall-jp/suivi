@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { estRapport, lireSeuils, synthese, SEUILS_PAR_DEFAUT, type Compteurs, type LigneApp, type RapportApp } from "./consommation.ts";
+import { estRapport, jourMoins, lireSeuils, synthese, valeurs, SEUILS_PAR_DEFAUT, type Compteurs, type LigneApp, type RapportApp } from "./consommation.ts";
 
 const zero: Compteurs = { req: 0, pic: 0, r429: 0, r402: 0, e5xx: 0, ia: 0, iaErr: 0, ia429: 0, iaMs: 0, tokIn: 0, tokOut: 0 };
 const T = 1_800_000_000_000;
@@ -72,4 +72,25 @@ test("une page d'accueil n'est pas un rapport", () => {
   assert.equal(estRapport({}), false);
   assert.equal(estRapport(null), false);
   assert.equal(estRapport(rapport("a", {})), true);
+});
+
+test("durées au choix : heure, 24 h, jours ; ancienne version sans historique", () => {
+  const r = rapport("a", { ia: 4, tokIn: 10 }, { ia: 2 });
+  assert.equal(valeurs(r, "1h")!.ia, 4);
+  assert.equal(valeurs(r, "1h")!.iaMin, 2);
+  assert.equal(valeurs(r, "7j"), null);
+  const jour = (j: string, ia: number, iaMin: number, pic = 1) => ({ ...zero, jour: j, ia, iaMin, pic, tokIn: ia * 100 });
+  r.aujourdhui = "2026-03-02";
+  r.jours = [jour("2025-03-01", 100, 50), jour("2026-02-20", 10, 3, 9), jour("2026-02-24", 5, 7), jour("2026-03-02", 1, 1)];
+  const s = valeurs(r, "7j")!;
+  assert.equal(s.ia, 6); // 24 février (le 2 mars moins 6 jours) et 2 mars
+  assert.equal(s.iaMin, 7);
+  assert.equal(s.depuis, undefined);
+  const m = valeurs(r, "30j")!;
+  assert.equal(m.ia, 16);
+  assert.equal(m.pic, 9);
+  assert.equal(valeurs(r, "1an")!.ia, 16); // le 1er mars 2025 est hors de l'année glissante
+  r.jours = r.jours.slice(1);
+  assert.equal(valeurs(r, "3m")!.depuis, "2026-02-20");
+  assert.equal(jourMoins("2026-03-01", 1), "2026-02-28");
 });

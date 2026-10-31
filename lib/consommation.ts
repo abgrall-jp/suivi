@@ -16,10 +16,13 @@ export type Compteurs = {
   tokOut: number; // jetons écrits par Gemini (réflexion comprise)
 };
 export type Motif = { motif: string; n: number };
+/** Compteurs d'un jour (version 2 de conso.cjs) ; iaMin = appels à l'IA dans la minute la plus chargée. */
+export type Jour = Compteurs & { jour: string; iaMin: number };
 export type RapportApp = {
-  app: string; format: number; maintenant: number; demarreLe: number; processus: number; memoireMo: number; enCours: number;
-  derniereHeure: Compteurs & { motifs: Motif[] }; dernieres24h: Compteurs & { motifs: Motif[] };
-  minutes: (Compteurs & { t: number })[]; heures: (Compteurs & { t: number })[];
+  app: string; format: number; version?: number; maintenant: number; aujourdhui?: string; demarreLe: number; processus: number; memoireMo: number; enCours: number;
+  derniereHeure: Compteurs & { motifs: Motif[]; iaMin?: number }; dernieres24h: Compteurs & { motifs: Motif[]; iaMin?: number };
+  minutes: (Compteurs & { t: number })[]; heures: (Compteurs & { t: number; iaMin?: number })[];
+  jours?: Jour[];
   limites: Record<string, string>;
 };
 
@@ -54,7 +57,7 @@ export const ALERTE = 0.8; // « attention » à 80 % d'un seuil
 export type Alerte = { niveau: "danger" | "attention"; app: string | null; texte: string };
 export type LigneApp = { id: string; nom: string; etat: "ok" | "absent" | "erreur"; message?: string; rapport?: RapportApp; cout24h?: number; cout1h?: number };
 
-const cout = (c: Pick<Compteurs, "tokIn" | "tokOut">, s: Seuils) => (c.tokIn * s.prixEntree + c.tokOut * s.prixSortie) / 1e6;
+export const cout = (c: Pick<Compteurs, "tokIn" | "tokOut">, s: Seuils) => (c.tokIn * s.prixEntree + c.tokOut * s.prixSortie) / 1e6;
 const pluriel = (n: number, mot: string) => `${n} ${mot}${n > 1 ? "s" : ""}`;
 
 /** Additionne les applications, calcule la dépense estimée et les alertes. */
@@ -118,4 +121,56 @@ export function synthese(lignes: LigneApp[], s: Seuils, maintenant = Date.now())
 /** Le rapport reçu ressemble-t-il à celui de conso.cjs ? (une application sans compteurs renvoie sa page d'accueil) */
 export function estRapport(d: any): d is RapportApp {
   return !!d && typeof d === "object" && d.format === 1 && !!d.derniereHeure && !!d.dernieres24h && Array.isArray(d.minutes) && Array.isArray(d.heures);
+}
+
+// --- Durées au choix dans le tableau ------------------------------------------------------------
+
+export const PERIODES = [
+  { id: "1h", nom: "1 heure" },
+  { id: "24h", nom: "24 heures" },
+  { id: "7j", nom: "7 jours", jours: 7 },
+  { id: "30j", nom: "30 jours", jours: 30 },
+  { id: "3m", nom: "3 mois", jours: 91 },
+  { id: "1an", nom: "1 an", jours: 365 },
+] as const;
+export type Periode = (typeof PERIODES)[number]["id"];
+export const estPeriode = (p: unknown): p is Periode => PERIODES.some(x => x.id === p);
+
+/** Jour (AAAA-MM-JJ) n jours avant le jour donné. */
+export function jourMoins(jour: string, n: number) {
+  const d = new Date(jour + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+
+export type Valeurs = Compteurs & { iaMin: number; depuis?: string };
+const CHAMPS: (keyof Compteurs)[] = ["req", "pic", "r429", "r402", "e5xx", "ia", "iaErr", "ia429", "iaMs", "tokIn", "tokOut"];
+
+/**
+ * Compteurs d'une application sur une durée : la dernière heure, les dernières 24 heures, ou les N derniers jours
+ * (aujourd'hui compris). null si l'application n'a pas encore l'historique par jour (ancienne version de conso.cjs).
+ * depuis : premier jour connu, quand l'historique est plus court que la durée demandée.
+ */
+export function valeurs(r: RapportApp, p: Periode): Valeurs | null {
+  if (p === "1h" || p === "24h") {
+    const c = p === "1h" ? r.derniereHeure : r.dernieres24h;
+    const iaMin = p === "1h" ? Math.max(0, ...r.minutes.map(m => m.ia || 0))
+      : c.iaMin ?? (r.heures.some(h => h.iaMin !== undefined) ? Math.max(0, ...r.heures.map(h => h.iaMin || 0)) : NaN);
+    const v = { iaMin } as Valeurs;
+    for (const k of CHAMPS) v[k] = c[k] || 0;
+    return v;
+  }
+  if (!r.jours || !r.aujourdhui) return null;
+  const n = (PERIODES.find(x => x.id === p) as { jours?: number }).jours!;
+  const debut = jourMoins(r.aujourdhui, n - 1);
+  const v = { iaMin: 0 } as Valeurs;
+  for (const k of CHAMPS) v[k] = 0;
+  const pris = r.jours.filter(j => j.jour >= debut && j.jour <= r.aujourdhui!);
+  for (const j of pris) {
+    for (const k of CHAMPS) v[k] = k === "pic" ? Math.max(v[k], j[k] || 0) : v[k] + (j[k] || 0);
+    v.iaMin = Math.max(v.iaMin, j.iaMin || 0);
+  }
+  const premier = r.jours.reduce((m, j) => (j.jour < m ? j.jour : m), r.aujourdhui);
+  if (premier > debut) v.depuis = premier;
+  return v;
 }
