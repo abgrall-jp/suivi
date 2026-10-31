@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.ts";
-import type { Alerte, LigneApp, Seuils } from "../lib/consommation.ts";
+import { cout, estPeriode, PERIODES, valeurs, type Alerte, type LigneApp, type Periode, type Seuils, type Valeurs } from "../lib/consommation.ts";
 
 // Onglet « Consommation » (administrateur) : appels à l'IA, refus et erreurs de chaque application, relus chaque minute.
 
@@ -9,6 +9,29 @@ type Reponse = {
   minutes: { t: number; ia: number; pic: number }[];
   total: { ia1h: number; ia24h: number; r429h: number; r402h: number; ia429h: number; e5xxh: number; cout1h: number; cout24h: number; picIaMinute: number; picSimultanees: number; enCours: number };
 };
+
+/** Colonnes du tableau dont la durée se choisit, avec leur durée par défaut. */
+const COLONNES = {
+  ia: { titre: "Appels IA", defaut: "24h" },
+  picIa: { titre: "Pic IA", sous: "par minute", defaut: "1h" },
+  reponse: { titre: "Réponse IA", sous: "moyenne", defaut: "1h" },
+  depense: { titre: "Dépense", defaut: "24h" },
+  r429: { titre: "Trop de demandes", defaut: "24h" },
+  r402: { titre: "Crédits épuisés", defaut: "24h" },
+  erreurs: { titre: "Erreurs", sous: "IA · serveur", defaut: "24h" },
+  req: { titre: "Demandes", defaut: "1h" },
+} satisfies Record<string, { titre: string; sous?: string; defaut: Periode }>;
+type Colonne = keyof typeof COLONNES;
+const CLE_DUREES = "suivi-conso-durees";
+function lireDurees(): Record<Colonne, Periode> {
+  const d = Object.fromEntries(Object.entries(COLONNES).map(([k, c]) => [k, c.defaut])) as Record<Colonne, Periode>;
+  try {
+    const l = JSON.parse(localStorage.getItem(CLE_DUREES) || "{}");
+    for (const k of Object.keys(d) as Colonne[]) if (estPeriode(l[k])) d[k] = l[k];
+  } catch { /* navigation privée */ }
+  return d;
+}
+const jourFr = (j: string) => new Date(j + "T12:00:00Z").toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
 
 const nb = (n: number) => n.toLocaleString("fr-FR");
 const dollars = (n: number) => (n < 0.01 && n > 0 ? "< 0,01 $" : `${n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`);
@@ -65,25 +88,68 @@ export function VueConsommation() {
 
       <Graphique minutes={d.minutes} />
 
+      <Tableau d={d} />
+      {absentes.length > 0 && <p className="petit">Sans chiffres pour le moment : {absentes.map(a => a.nom).join(", ")}.</p>}
+      <p className="petit">
+        Chaque application garde ses chiffres minute par minute sur 24 heures et jour par jour sur un an, même après un redémarrage
+        (la durée de chaque colonne se choisit dans son petit menu). La dépense est une estimation
+        d'après les jetons ({s.prixEntree} $ le million lus, {s.prixSortie} $ le million écrits) : la facture exacte est dans Google Cloud &gt; Facturation.
+        Les seuils se règlent dans cPanel, variables de Suivi : SEUIL_IA_PAR_MINUTE, SEUIL_SIMULTANEES, SEUIL_COUT_JOUR, SEUIL_ERREURS_HEURE,
+        PRIX_IA_ENTREE, PRIX_IA_SORTIE. Alerte à 80 % d'un seuil.
+      </p>
+    </section>
+  );
+}
+
+/** Tableau par application ; chaque colonne a sa durée (1 heure à 1 an), retenue par le navigateur. */
+function Tableau({ d }: { d: Reponse }) {
+  const [durees, setDurees] = useState(lireDurees);
+  const choisir = (c: Colonne, p: Periode) => {
+    const n = { ...durees, [c]: p };
+    setDurees(n);
+    try { localStorage.setItem(CLE_DUREES, JSON.stringify(n)); } catch { /* navigation privée */ }
+  };
+  const nomPeriode = (p: Periode) => PERIODES.find(x => x.id === p)!.nom;
+  const lignes = d.applications.map(a => {
+    const v = {} as Record<Colonne, Valeurs | null>;
+    for (const c of Object.keys(COLONNES) as Colonne[]) v[c] = a.rapport ? valeurs(a.rapport, durees[c]) : null;
+    return { a, v };
+  });
+  // Totaux : somme des applications qui ont des chiffres pour la durée choisie.
+  const total = (c: Colonne, f: (x: Valeurs) => number) => lignes.reduce((n, l) => n + (l.v[c] ? f(l.v[c]!) : 0), 0);
+  const manque = (c: Colonne) => lignes.some(l => l.a.rapport && !l.v[c]);
+  const cellule = (c: Colonne, x: Valeurs | null, texte: (x: Valeurs) => string, classe?: (x: Valeurs) => string) => {
+    if (!x) return <td title="Historique par jour pas encore disponible : mettre à jour le fichier conso.cjs de cette application.">–</td>;
+    return (
+      <td className={classe?.(x) || ""} title={x.depuis ? `Chiffres depuis le ${jourFr(x.depuis)} (début de l'historique)` : undefined}>
+        {texte(x)}{x.depuis && <sup>*</sup>}
+      </td>
+    );
+  };
+  const moyenne = (ia: number, ms: number) => (ia ? `${(ms / ia / 1000).toFixed(1).replace(".", ",")} s` : "–");
+  const premier = lignes.flatMap(l => l.a.rapport?.jours?.map(j => j.jour) || []).sort()[0];
+  const partiel = lignes.some(l => Object.values(l.v).some(x => x?.depuis));
+  return (
+    <>
       <div className="defile conso-table">
         <table className="tableau">
           <thead>
             <tr>
               <th className="fixe">Application</th>
-              <th>Appels IA<br /><small>1 h · 24 h</small></th>
-              <th>Pic IA<br /><small>par minute</small></th>
-              <th>Réponse IA<br /><small>moyenne, 1 h</small></th>
-              <th>Dépense<br /><small>24 h</small></th>
-              <th>Trop de demandes<br /><small>1 h · 24 h</small></th>
-              <th>Crédits épuisés<br /><small>1 h · 24 h</small></th>
-              <th>Erreurs<br /><small>IA · serveur, 24 h</small></th>
-              <th>Demandes<br /><small>1 h</small></th>
+              {(Object.entries(COLONNES) as [Colonne, { titre: string; sous?: string }][]).map(([c, col]) => (
+                <th key={c}>
+                  {col.titre}{col.sous && <><br /><small>{col.sous}</small></>}<br />
+                  <select className="conso-duree" value={durees[c]} onChange={e => choisir(c, e.target.value as Periode)} aria-label={`Durée de la colonne ${col.titre}`}>
+                    {PERIODES.map(p => <option key={p.id} value={p.id}>{p.nom}</option>)}
+                  </select>
+                </th>
+              ))}
               <th>Mémoire</th>
               <th>Démarrée</th>
             </tr>
           </thead>
           <tbody>
-            {d.applications.map(a => {
+            {lignes.map(({ a, v }) => {
               const r = a.rapport;
               if (!r) return (
                 <tr key={a.id}>
@@ -93,42 +159,53 @@ export function VueConsommation() {
                   </td>
                 </tr>
               );
-              const h = r.derniereHeure, j = r.dernieres24h;
-              const picIa = Math.max(0, ...r.minutes.map(m => m.ia));
               return (
                 <tr key={a.id}>
                   <td className="fixe">
                     <details>
                       <summary>{a.nom}</summary>
-                      <Motifs titre="Dernière heure" motifs={h.motifs} />
-                      <Motifs titre="24 heures" motifs={j.motifs} />
-                      {Object.keys(r.limites).length > 0 && <p className="petit">Réglages : {Object.entries(r.limites).map(([k, v]) => `${k} = ${v}`).join(", ")}</p>}
+                      <Motifs titre="Dernière heure" motifs={r.derniereHeure.motifs} />
+                      <Motifs titre="24 heures" motifs={r.dernieres24h.motifs} />
+                      {Object.keys(r.limites).length > 0 && <p className="petit">Réglages : {Object.entries(r.limites).map(([k, val]) => `${k} = ${val}`).join(", ")}</p>}
                     </details>
                   </td>
-                  <td>{nb(h.ia)} · {nb(j.ia)}</td>
-                  <td>{nb(picIa)}</td>
-                  <td>{h.ia ? `${(h.iaMs / h.ia / 1000).toFixed(1).replace(".", ",")} s` : "–"}</td>
-                  <td>{dollars(a.cout24h || 0)}</td>
-                  <td className={h.r429 ? "moyen" : ""}>{nb(h.r429)} · {nb(j.r429)}</td>
-                  <td className={h.r402 ? "faible" : ""}>{nb(h.r402)} · {nb(j.r402)}</td>
-                  <td className={h.ia429 || h.e5xx ? "faible" : ""}>{nb(j.iaErr)} · {nb(j.e5xx)}</td>
-                  <td>{nb(h.req)}</td>
+                  {cellule("ia", v.ia, x => nb(x.ia))}
+                  {cellule("picIa", v.picIa, x => (Number.isNaN(x.iaMin) ? "–" : nb(x.iaMin)))}
+                  {cellule("reponse", v.reponse, x => moyenne(x.ia, x.iaMs))}
+                  {cellule("depense", v.depense, x => dollars(cout(x, d.seuils)))}
+                  {cellule("r429", v.r429, x => nb(x.r429), x => (x.r429 ? "moyen" : ""))}
+                  {cellule("r402", v.r402, x => nb(x.r402), x => (x.r402 ? "faible" : ""))}
+                  {cellule("erreurs", v.erreurs, x => `${nb(x.iaErr)} · ${nb(x.e5xx)}`, x => (x.ia429 || x.e5xx ? "faible" : ""))}
+                  {cellule("req", v.req, x => nb(x.req))}
                   <td>{r.memoireMo} Mo{r.processus > 1 ? ` (${r.processus} processus)` : ""}</td>
                   <td title={new Date(r.demarreLe).toLocaleString("fr-FR")}>il y a {depuis(r.demarreLe)}</td>
                 </tr>
               );
             })}
           </tbody>
+          <tfoot>
+            <tr>
+              <th className="fixe">Toutes</th>
+              <td>{nb(total("ia", x => x.ia))}{manque("ia") && <sup>†</sup>}</td>
+              <td title="Pic de l'application la plus chargée">{nb(Math.max(0, ...lignes.map(l => l.v.picIa?.iaMin || 0)))}</td>
+              <td>{moyenne(total("reponse", x => x.ia), total("reponse", x => x.iaMs))}</td>
+              <td>{dollars(total("depense", x => cout(x, d.seuils)))}{manque("depense") && <sup>†</sup>}</td>
+              <td>{nb(total("r429", x => x.r429))}{manque("r429") && <sup>†</sup>}</td>
+              <td>{nb(total("r402", x => x.r402))}{manque("r402") && <sup>†</sup>}</td>
+              <td>{nb(total("erreurs", x => x.iaErr))} · {nb(total("erreurs", x => x.e5xx))}{manque("erreurs") && <sup>†</sup>}</td>
+              <td>{nb(total("req", x => x.req))}{manque("req") && <sup>†</sup>}</td>
+              <td colSpan={2}></td>
+            </tr>
+          </tfoot>
         </table>
       </div>
-      {absentes.length > 0 && <p className="petit">Sans chiffres pour le moment : {absentes.map(a => a.nom).join(", ")}.</p>}
-      <p className="petit">
-        Chaque application garde ses chiffres des dernières 24 heures, même après un redémarrage. La dépense est une estimation
-        d'après les jetons ({s.prixEntree} $ le million lus, {s.prixSortie} $ le million écrits) : la facture exacte est dans Google Cloud &gt; Facturation.
-        Les seuils se règlent dans cPanel, variables de Suivi : SEUIL_IA_PAR_MINUTE, SEUIL_SIMULTANEES, SEUIL_COUT_JOUR, SEUIL_ERREURS_HEURE,
-        PRIX_IA_ENTREE, PRIX_IA_SORTIE. Alerte à 80 % d'un seuil.
-      </p>
-    </section>
+      {(partiel || Object.keys(COLONNES).some(c => manque(c as Colonne))) && (
+        <p className="petit">
+          {partiel && <>* L'historique par jour a commencé le {premier ? jourFr(premier) : "…"} : les durées plus longues ne comptent que depuis cette date. </>}
+          {Object.keys(COLONNES).some(c => manque(c as Colonne)) && <>– et † : certaines applications n'ont pas encore l'historique par jour (fichier conso.cjs à mettre à jour), elles ne sont pas comptées dans le total.</>}
+        </p>
+      )}
+    </>
   );
 }
 

@@ -211,3 +211,6 @@ button.lien-nom:hover { text-decoration: underline; }
 .conso-table td { font-variant-numeric: tabular-nums; } .conso-table td.gauche { text-align: left; }
 .conso-table details summary { cursor: pointer; font-weight: 500; } .conso-table details ul { margin: 4px 0; padding-left: 18px; white-space: normal; }
 .conso-table details[open] { white-space: normal; min-width: 280px; }
+.conso-duree { margin-top: 4px; font-size: 0.8em; padding: 1px 2px; font-weight: normal; }
+.conso-table tfoot th, .conso-table tfoot td { font-weight: 600; border-top: 2px solid currentColor; }
+.conso-table sup { font-size: 0.7em; margin-left: 1px; }
