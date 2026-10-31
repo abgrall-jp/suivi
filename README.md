@@ -10,3 +10,8 @@ et voit les résultats de ses élèves au même endroit, avec une seule liste d'
 
 Construire : `npm install && npm run build`, puis `npm start`.
 Essais : `npm test` (rapprochement des noms) ; `tests/` pour l'essai complet avec les émulateurs Firebase.
+
+## Consommation (onglet administrateur)
+- `outils/conso.cjs` : compteurs à copier dans `dist/` de chaque application (appels à Gemini, jetons, refus 429/402, erreurs, demandes simultanées).
+  `outils/brancher-conso.mjs` ajoute la ligne qui le charge dans `dist/server.cjs`. L'application répond alors sur `/api/suivi/consommation` (clé de liaison).
+- `lib/consommation.ts` : additions et alertes (à 80 % des seuils SEUIL_* réglés dans cPanel) ; route `/api/admin/consommation` ; écran `src/Consommation.tsx`.
