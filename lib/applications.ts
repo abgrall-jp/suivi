@@ -20,6 +20,7 @@ export const APPLICATIONS: Application[] = [
   { id: "appreciations", code: "APP", nom: "Studio d'Appréciations", url: "https://appreciations.jepeuxapprendre.fr", eleves: true, lecture: "studio" },
   { id: "quiz", code: "QUIZ", nom: "Quiz IA", url: "https://quiz.jepeuxapprendre.fr", eleves: true },
   { id: "edublockly", code: "EBK", nom: "EduBlockly Micro:bit", url: "https://edublockly.jepeuxapprendre.fr", eleves: true, parents: false },
+  { id: "categorisation", code: "CAT", nom: "Catégorisation de mots", url: "https://categorisation.jepeuxapprendre.fr", eleves: true },
   { id: "conception", code: "CNC", nom: "Assistant Conception Pédagogique", url: "https://conception.jepeuxapprendre.fr", eleves: false },
   { id: "maths", code: "MTH", nom: "Générateur de Problèmes de Maths", url: "https://maths-pb.jepeuxapprendre.fr", eleves: false },
   { id: "motsmeles", code: "MML", nom: "Mots mêlés", url: "https://motsmeles.jepeuxapprendre.fr", eleves: false },
