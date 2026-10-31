@@ -35,10 +35,11 @@ import { colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essai
 //   ADRESSE_PUBLIQUE          adresse de Suivi dans les e-mails (sinon https://suivi.jepeuxapprendre.fr)
 //   SEUIL_IA_PAR_MINUTE, SEUIL_SIMULTANEES, SEUIL_COUT_JOUR, SEUIL_ERREURS_HEURE, PRIX_IA_ENTREE, PRIX_IA_SORTIE
 //                             seuils de l'onglet Consommation (voir lib/consommation.ts) ; alerte à 80 %
+//   SUIVI_CONSO_<APPLI>       clé de lecture des compteurs d'une application sans porte de liaison (= SUIVI_CLE dans l'application)
 // ---------------------------------------------------------------------------
 
 const PORT = Number(process.env.PORT) || 3000;
-const APP_VERSION = "2026-10-31.1";
+const APP_VERSION = "2026-10-31.2";
 
 function readJsonFile(fileName: string): any {
   try {
@@ -1492,11 +1493,14 @@ app.post("/api/admin/trimestres", exigerEnseignant(), route(async (req, res) => 
 const seuilsConso = lireSeuils(process.env);
 let cacheConso: { at: number; data: any } | null = null;
 let lectureConso: Promise<any> | null = null;
+// Clé de lecture des compteurs : la clé de liaison, ou SUIVI_CONSO_<APPLI> pour les applications sans porte de liaison
+// (outils de l'enseignant, Studio d'Appréciations, Plan de classe IA) : la même valeur que SUIVI_CLE dans l'application.
+const cleConso = (a: Application) => (parPorte(a) && cleDe(a)) || varApp("SUIVI_CONSO", a);
 async function lireConsommation() {
-  const applis = APPLICATIONS.filter(a => parPorte(a) && cleDe(a));
-  const lignes: LigneApp[] = await Promise.all(applis.map(async (a): Promise<LigneApp> => {
+  const lignes: LigneApp[] = await Promise.all(APPLICATIONS.map(async (a): Promise<LigneApp> => {
+    if (!cleConso(a)) return { id: a.id, nom: a.nom, etat: "absent", message: `pas encore reliés (variable SUIVI_CONSO_${a.id.toUpperCase()} dans Suivi)` };
     try {
-      const r = await fetch(urlDe(a) + "/api/suivi/consommation", { headers: { "X-Suivi-Cle": cleDe(a) }, signal: AbortSignal.timeout(8000) });
+      const r = await fetch(urlDe(a) + "/api/suivi/consommation", { headers: { "X-Suivi-Cle": cleConso(a) }, signal: AbortSignal.timeout(8000) });
       let d: any = null;
       try { d = await r.json(); } catch {}
       if (r.ok && estRapport(d)) return { id: a.id, nom: a.nom, etat: "ok", rapport: d };

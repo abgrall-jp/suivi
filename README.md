@@ -13,5 +13,7 @@ Essais : `npm test` (rapprochement des noms) ; `tests/` pour l'essai complet ave
 
 ## Consommation (onglet administrateur)
 - `outils/conso.cjs` : compteurs à copier dans `dist/` de chaque application (appels à Gemini, jetons, refus 429/402, erreurs, demandes simultanées).
-  `outils/brancher-conso.mjs` ajoute la ligne qui le charge dans `dist/server.cjs`. L'application répond alors sur `/api/suivi/consommation` (clé de liaison).
+  `outils/brancher-conso.mjs` ajoute la ligne qui le charge dans `dist/server.cjs` ; ou bien `outils/demarrer.cjs` (remplacer __APPLI__),
+  à donner comme fichier de démarrage dans cPanel, branche les compteurs sans toucher à `dist/server.cjs`.
+  Applications sans porte de liaison : clé `SUIVI_CLE` dans l'application, `SUIVI_CONSO_<APPLI>` dans Suivi. L'application répond alors sur `/api/suivi/consommation` (clé de liaison).
 - `lib/consommation.ts` : additions et alertes (à 80 % des seuils SEUIL_* réglés dans cPanel) ; route `/api/admin/consommation` ; écran `src/Consommation.tsx`.

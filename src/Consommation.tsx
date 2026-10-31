@@ -89,7 +89,7 @@ export function VueConsommation() {
                 <tr key={a.id}>
                   <td className="fixe">{a.nom}</td>
                   <td colSpan={10} className={a.etat === "erreur" ? "erreur gauche" : "petit gauche"}>
-                    {a.etat === "erreur" ? `⛔ ${a.message}` : "Compteurs pas encore installés (fichier conso.cjs)."}
+                    {a.etat === "erreur" ? `⛔ ${a.message}` : a.message ? `Compteurs ${a.message}.` : "Compteurs pas encore installés (fichier conso.cjs)."}
                   </td>
                 </tr>
               );
@@ -121,7 +121,7 @@ export function VueConsommation() {
           </tbody>
         </table>
       </div>
-      {absentes.length > 0 && <p className="petit">{absentes.map(a => a.nom).join(", ")} : installez le paquet « compteurs » de l'application pour voir ses chiffres ici.</p>}
+      {absentes.length > 0 && <p className="petit">Sans chiffres pour le moment : {absentes.map(a => a.nom).join(", ")}.</p>}
       <p className="petit">
         Chaque application garde ses chiffres des dernières 24 heures, même après un redémarrage. La dépense est une estimation
         d'après les jetons ({s.prixEntree} $ le million lus, {s.prixSortie} $ le million écrits) : la facture exacte est dans Google Cloud &gt; Facturation.
