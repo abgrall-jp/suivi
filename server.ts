@@ -1196,7 +1196,10 @@ app.post("/api/publier/tableau", exigerEnseignant(), route(async (req, res) => {
     type: "tableau", uid: e.uid, enseignant: await nomEnseignant(e), classe, classeNom: eleves[0].classe, publieLe, ...(seul ? { eleve: seul } : {}),
     colonnes, lignes, refIds: eleves.map(r => r.id), noms: Object.fromEntries(eleves.map(r => [r.id, { nom: r.nom, prenom: r.prenom, classe: r.classe }])),
   });
-  res.json({ ok: true, publieLe, eleves: eleves.length, colonnes: colonnes.length });
+  // Élèves de la classe qui ne reçoivent rien : sans aucun résultat rattaché dans les applications de l'enseignant
+  // (nom à vérifier dans « Noms des élèves », ou pas encore de compte). Dit à l'enseignant pour qu'il ne croie pas qu'ils l'ont.
+  const absents = seul ? [] : t.refs.filter(r => cleClasse(r.classe) === classe && !t.presents.has(r.id)).sort(parNom).map(r => `${r.prenom} ${r.nom}`.trim());
+  res.json({ ok: true, publieLe, eleves: eleves.length, colonnes: colonnes.length, noms: eleves.map(r => `${r.prenom} ${r.nom}`.trim()), absents });
 }));
 
 app.post("/api/publier/bulletin", exigerEnseignant(), route(async (req, res) => {
