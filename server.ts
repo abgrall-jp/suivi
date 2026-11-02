@@ -215,8 +215,8 @@ async function envoyerMail(a: string, sujet: string, texte: string) {
 
 // --- Données lues dans les applications (gardées 20 secondes) ------------------------------
 type Donnees = {
-  classes: { id: string; name: string; code?: string }[];
-  students: { id: string; name: string; classId: string; className: string; provisionalPassword?: boolean; parentPasswords?: number[] }[];
+  classes: { id: string; name: string; code?: string; codeLibelle?: string }[];
+  students: { id: string; name: string; classId: string; className: string; provisionalPassword?: boolean; parentPasswords?: number[]; code?: string; codeLibelle?: string }[];
   exercises: { id: string; title: string }[];
   results: { id: string; studentId: string; exerciseId: string; exerciseTitle: string; percent: number; score: string; completedAt: number | null }[];
 };

@@ -36,10 +36,18 @@ test("codes d'entrée de l'élève dans les applications qui en ont", async () =
     } },
     { app: { id: "quiz", nom: "Quiz", url: "https://q" }, d: { classes: [{ id: "q", name: "5B", code: "x" }], students: [{ id: "q1", classId: "q", className: "5B" }] } },
     { app: { id: "memoriser", nom: "Mémoriser", url: "https://m", libelleCode: "Code" }, d: null },
+    { app: { id: "organigrammes", nom: "Organigrammes", url: "https://o" }, d: {
+      classes: [{ id: "o1", name: "5B" }],
+      students: [{ id: "o1_7", classId: "o1", className: "5B", code: "4821", codeLibelle: "Code initial (première connexion)" }, { id: "o1_8", classId: "o1", className: "5B" }],
+    } },
   ];
+  resultat.push({ app: "organigrammes", studentId: "o1_7", refId: "R1" }, { app: "organigrammes", studentId: "o1_8", refId: "R2" });
   assert.deepEqual(codesDeLEleve("R1", resultat, lus), [
     { appli: "concentre", nom: "Concentré", url: "https://c", libelle: "Code de la classe", classe: "5e B", code: "AB12CD" },
     { appli: "evalia", nom: "Eval IA", url: "https://e", libelle: "Mot de passe enseignant", classe: "5B", code: "40" },
+    { appli: "organigrammes", nom: "Organigrammes", url: "https://o", libelle: "Code initial (première connexion)", classe: "5B", code: "4821" },
   ]);
+  // Élève qui a déjà choisi son mot de passe : la porte ne donne plus de code, rien n'est montré.
+  assert.deepEqual(codesDeLEleve("R2", resultat, lus).map(c => c.appli), ["concentre"]);
   assert.deepEqual(codesDeLEleve("R3", resultat, lus), []);
 });
