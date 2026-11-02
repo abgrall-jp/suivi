@@ -5,14 +5,15 @@
 // qui partage le projet Google de Suivi (mêmes comptes enseignants, aucune clé à régler), ou dans la base du Plan de classe IA
 // (autre projet Google : compte de service à part, enseignant reconnu par son adresse e-mail).
 // « parents: false » : l'application n'a pas d'espace parents (pas de mot de passe parent à lui envoyer).
-export type Application = { id: string; code: string; nom: string; url: string; eleves: boolean; lecture?: "porte" | "studio" | "planclasse"; parents?: false };
+// « libelleCode » : l'élève tape un code pour entrer (donné par la porte de liaison sur chaque classe) ; le Séquenceur le lui rappelle.
+export type Application = { id: string; code: string; nom: string; url: string; eleves: boolean; lecture?: "porte" | "studio" | "planclasse"; parents?: false; libelleCode?: string };
 
 export const APPLICATIONS: Application[] = [
   { id: "sequenceur", code: "SEQ", nom: "Séquenceur", url: "https://sequenceur.jepeuxapprendre.fr", eleves: true },
-  { id: "evalia", code: "EVA", nom: "Eval IA", url: "https://evalia.jepeuxapprendre.fr", eleves: true },
+  { id: "evalia", code: "EVA", nom: "Eval IA", url: "https://evalia.jepeuxapprendre.fr", eleves: true, libelleCode: "Mot de passe enseignant" },
   { id: "edubot", code: "EDU", nom: "Edubot", url: "https://edubot.jepeuxapprendre.fr", eleves: true },
   { id: "cps", code: "CPS", nom: "AI CPS", url: "https://cps.jepeuxapprendre.fr", eleves: true, parents: false },
-  { id: "concentre", code: "CON", nom: "Concentré et Attentif", url: "https://concentre.jepeuxapprendre.fr", eleves: true },
+  { id: "concentre", code: "CON", nom: "Concentré et Attentif", url: "https://concentre.jepeuxapprendre.fr", eleves: true, libelleCode: "Code de la classe" },
   { id: "memoriser", code: "MEM", nom: "Mémoriser c'est facile", url: "https://memoriser.jepeuxapprendre.fr", eleves: true },
   { id: "motscroises", code: "MCR", nom: "Mots croisés", url: "https://motscroises.jepeuxapprendre.fr", eleves: true },
   { id: "textetrous", code: "TAT", nom: "Texte à trous", url: "https://textetrous.jepeuxapprendre.fr", eleves: true },

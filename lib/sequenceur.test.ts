@@ -17,3 +17,29 @@ test("trimestres commencés, le plus récent d'abord", () => {
   assert.deepEqual(trimestresCommences(per, Date.parse("2027-01-10T12:00:00Z")), ["T2", "T1"]);
   assert.deepEqual(trimestresCommences(per, Date.parse("2026-08-20T12:00:00Z")), []);
 });
+
+test("codes d'entrée de l'élève dans les applications qui en ont", async () => {
+  const { codesDeLEleve } = await import("./sequenceur.ts");
+  const resultat = [
+    { app: "concentre", studentId: "c1__s1", refId: "R1" },
+    { app: "concentre", studentId: "c2__s9", refId: "R2" },
+    { app: "evalia", studentId: "e1__a", refId: "R1" },
+    { app: "quiz", studentId: "q1", refId: "R1" },
+  ];
+  const lus = [
+    { app: { id: "concentre", nom: "Concentré", url: "https://c", libelleCode: "Code de la classe" }, d: {
+      classes: [{ id: "c1", name: "5e B", code: "AB12CD" }, { id: "c2", name: "5e C", code: "ZZ99ZZ" }],
+      students: [{ id: "c1__s1", classId: "c1", className: "5e B" }, { id: "c2__s9", classId: "c2", className: "5e C" }],
+    } },
+    { app: { id: "evalia", nom: "Eval IA", url: "https://e", libelleCode: "Mot de passe enseignant" }, d: {
+      classes: [{ id: "e1", name: "5B", code: "40" }], students: [{ id: "e1__a", classId: "e1", className: "5B" }],
+    } },
+    { app: { id: "quiz", nom: "Quiz", url: "https://q" }, d: { classes: [{ id: "q", name: "5B", code: "x" }], students: [{ id: "q1", classId: "q", className: "5B" }] } },
+    { app: { id: "memoriser", nom: "Mémoriser", url: "https://m", libelleCode: "Code" }, d: null },
+  ];
+  assert.deepEqual(codesDeLEleve("R1", resultat, lus), [
+    { appli: "concentre", nom: "Concentré", url: "https://c", libelle: "Code de la classe", classe: "5e B", code: "AB12CD" },
+    { appli: "evalia", nom: "Eval IA", url: "https://e", libelle: "Mot de passe enseignant", classe: "5B", code: "40" },
+  ]);
+  assert.deepEqual(codesDeLEleve("R3", resultat, lus), []);
+});

@@ -12,7 +12,7 @@ import { estRapport, lireSeuils, synthese, type LigneApp, estPeriodeEns, jourMoi
 import { correspond, empreinte, genererMotDePasse } from "./lib/parents.ts";
 import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, normaliserCode, signerJeton } from "./lib/famille.ts";
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
-import { noteDeResultat, trimestresCommences } from "./lib/sequenceur.ts";
+import { codesDeLEleve, noteDeResultat, trimestresCommences, type CodeClasse } from "./lib/sequenceur.ts";
 import { plansDe, remarquesParEleve, type PlanPublie, type RemarqueEleve } from "./lib/planclasse.ts";
 import { colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essaiRetenu, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
 
@@ -215,7 +215,7 @@ async function envoyerMail(a: string, sujet: string, texte: string) {
 
 // --- Données lues dans les applications (gardées 20 secondes) ------------------------------
 type Donnees = {
-  classes: { id: string; name: string }[];
+  classes: { id: string; name: string; code?: string }[];
   students: { id: string; name: string; classId: string; className: string; provisionalPassword?: boolean; parentPasswords?: number[] }[];
   exercises: { id: string; title: string }[];
   results: { id: string; studentId: string; exerciseId: string; exerciseTitle: string; percent: number; score: string; completedAt: number | null }[];
@@ -587,7 +587,7 @@ async function calculerTableauSansMemo(e: Enseignant, frais = false) {
   });
   const presents = new Set(resultat.map(r => r.refId).filter((id): id is string => !!id && gardes.has(id)));
   return {
-    provisoire, refs, presents, essais, plusRecent, resultat,
+    provisoire, refs, presents, essais, plusRecent, resultat, lus,
     applications: lus.map(l => ({
       id: l.app.id, code: l.app.code, nom: l.app.nom, erreur: l.erreur,
       exercices: (l.d?.exercises || []).filter(x => l.d!.results.some(r => r.exerciseId === x.id)).map(x => ({ id: x.id, titre: x.title })),
@@ -1659,6 +1659,7 @@ app.get("/api/sequenceur/eleve", exigerSequenceur(), route(async (req, res) => {
   const per = await periodes();
   const trimestres = trimestresCommences(per);
   const bulletins: any[] = [];
+  const codes: CodeClasse[] = [];
   let eleve: { prenom: string; nom: string; classe: string } | null = null;
   for (const { e } of comptes) {
     const t = await calculerTableau(e);
@@ -1666,6 +1667,10 @@ app.get("/api/sequenceur/eleve", exigerSequenceur(), route(async (req, res) => {
     const ref = refId ? t.refs.find(r => r.id === refId) : undefined;
     if (!ref) continue;
     eleve ||= { prenom: ref.prenom, nom: ref.nom, classe: ref.classe };
+    // Codes d'entrée de l'élève dans les autres applications (code de la classe, mot de passe enseignant), rappelés sous ses notes.
+    for (const c of codesDeLEleve(ref.id, t.resultat, t.lus.map(l => ({ app: l.app, d: l.d })))) {
+      if (!codes.some(x => x.appli === c.appli && x.code === c.code)) codes.push(c);
+    }
     const classe = cleClasse(ref.classe);
     const essais = t.essais.get(ref.id) || {};
     const docs = await db.getAll(...trimestres.flatMap(tr => [
@@ -1687,7 +1692,7 @@ app.get("/api/sequenceur/eleve", exigerSequenceur(), route(async (req, res) => {
     });
   }
   if (!eleve) throw Object.assign(httpError(404, "Élève pas encore rattaché dans Suivi."), { code: "ELEVE_INCONNU" });
-  res.json({ eleve, bulletins });
+  res.json({ eleve, bulletins, codes });
 }));
 
 async function startServer() {
