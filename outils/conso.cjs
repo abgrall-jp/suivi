@@ -7,7 +7,9 @@
 //   - les demandes reçues par l'application (/api/...), le nombre traité en même temps (pic),
 //   - les refus « Trop de demandes » (429), « crédits épuisés » (402) et les erreurs du serveur (5xx), avec la route et le code,
 //   - les appels à Gemini (toutes les fonctions IA), leurs erreurs, les refus de Google (429 = quota), les jetons et la durée.
-// Rien sur les élèves ni sur les textes : seulement des nombres et des noms de routes.
+//   - par jour, les appels à l'IA et les jetons de chaque enseignant connecté (adresse et nom lus dans son jeton de connexion),
+//     les demandes sans compte (élèves, visiteurs) étant regroupées sous « sans compte ».
+// Rien sur les élèves ni sur les textes : seulement des nombres, des noms de routes et l'adresse des enseignants.
 // Les chiffres sont gardés en mémoire et recopiés chaque minute dans un petit fichier par processus (dossier ~/.jpa-conso),
 // pour additionner les processus lancés par l'hébergeur et ne rien perdre aux redémarrages. Les fichiers des processus
 // arrêtés depuis plus d'un jour sont versés dans un fichier « archive » par application.
@@ -17,6 +19,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
+const { AsyncLocalStorage } = require("async_hooks");
 
 const MINUTE = 60e3;
 const GARDE = 25 * 60;   // minutes gardées
@@ -24,6 +27,9 @@ const GARDE_JOURS = 400; // jours gardés
 const IA_URL = /\/models\/[^/?]+:(generateContent|streamGenerateContent|generateImages|generateVideos|predict|predictLongRunning|embedContent|batchEmbedContents)\b/;
 const CHAMPS = ["req", "pic", "r429", "r402", "e5xx", "ia", "iaErr", "ia429", "iaMs", "tokIn", "tokOut"];
 const MAXIMA = new Set(["pic", "iaMin"]); // gardés au plus haut (et non additionnés)
+const CHAMPS_ENS = ["req", "ia", "iaErr", "tokIn", "tokOut"]; // compteurs par enseignant
+const MAX_ENS = 500; // enseignants différents par jour, au plus
+const SANS_COMPTE = "-";
 
 /** Jour à Paris (AAAA-MM-JJ) d'un instant. */
 const formatJour = new Intl.DateTimeFormat("fr-CA", { timeZone: "Europe/Paris", year: "numeric", month: "2-digit", day: "2-digit" });
@@ -92,6 +98,33 @@ module.exports = function installerConso(app, appId) {
     for (const s of paire) if (Object.keys(s.motifs).length < 60 || s.motifs[cle]) s.motifs[cle] = (s.motifs[cle] || 0) + 1;
   };
 
+  // --- Qui fait la demande : l'enseignant connecté (jeton Firebase de l'en-tête Authorization) -----------
+  // Le jeton est seulement lu, pas vérifié : c'est l'application qui le vérifie. Il ne sert qu'à ranger les chiffres.
+  const contexte = new AsyncLocalStorage();
+  const lireJeton = req => {
+    try {
+      const m = /^Bearer\s+([\w-]+)\.([\w-]+)\.[\w-]*$/i.exec(String(req.headers.authorization || ""));
+      if (!m) return null;
+      const p = JSON.parse(Buffer.from(m[2], "base64url").toString("utf8"));
+      const email = String(p.email || "").toLowerCase().slice(0, 120);
+      const cle = email || (p.user_id || p.sub ? "uid:" + String(p.user_id || p.sub).slice(0, 60) : "");
+      return cle ? { cle, nom: String(p.name || "").slice(0, 80) } : null;
+    } catch { return null; }
+  };
+  const ens = (jour, qui) => {
+    const t = (jour.ens ||= {});
+    let cle = qui ? qui.cle : SANS_COMPTE;
+    if (!t[cle] && Object.keys(t).length >= MAX_ENS) cle = "autres";
+    const e = (t[cle] ||= { req: 0, ia: 0, iaErr: 0, tokIn: 0, tokOut: 0 });
+    if (qui && qui.nom && !e.nom) e.nom = qui.nom;
+    return e;
+  };
+  /** Ajoute aussi au compteur de l'enseignant de la demande en cours. */
+  const ajouterQui = (paire, qui, champ, n = 1) => {
+    ajouter(paire, champ, n);
+    ens(paire[1], qui)[champ] += n;
+  };
+
   // --- Appels à Gemini : le client Google passe par fetch ---------------------------------
   const fetchOrigine = globalThis.fetch;
   if (typeof fetchOrigine === "function" && !fetchOrigine.__conso) {
@@ -102,18 +135,19 @@ module.exports = function installerConso(app, appId) {
       if (!m) return fetchOrigine.call(this, entree, init);
       const debut = Date.now();
       const p = seaux2();
-      ajouter(p, "ia");
+      const qui = contexte.getStore() || null;
+      ajouterQui(p, qui, "ia");
       let r;
       try {
         r = await fetchOrigine.call(this, entree, init);
       } catch (e) {
-        ajouter(p, "iaErr");
+        ajouterQui(p, qui, "iaErr");
         motif(p, `IA : pas de réponse de Google (${String(e?.name || "erreur")})`);
         throw e;
       }
       ajouter(p, "iaMs", Date.now() - debut);
       if (!r.ok) {
-        ajouter(p, "iaErr");
+        ajouterQui(p, qui, "iaErr");
         if (r.status === 429) ajouter(p, "ia429");
         motif(p, `IA : Google a répondu ${r.status}${r.status === 429 ? " (quota)" : r.status === 503 ? " (surchargé)" : ""}`);
       } else if (m[1] === "generateContent") {
@@ -122,8 +156,8 @@ module.exports = function installerConso(app, appId) {
           r.clone().json().then(d => {
             const u = d && d.usageMetadata;
             if (!u) return;
-            ajouter(p, "tokIn", Number(u.promptTokenCount) || 0);
-            ajouter(p, "tokOut", (Number(u.candidatesTokenCount) || 0) + (Number(u.thoughtsTokenCount) || 0));
+            ajouterQui(p, qui, "tokIn", Number(u.promptTokenCount) || 0);
+            ajouterQui(p, qui, "tokOut", (Number(u.candidatesTokenCount) || 0) + (Number(u.thoughtsTokenCount) || 0));
           }, () => {});
         } catch {}
       }
@@ -143,7 +177,8 @@ module.exports = function installerConso(app, appId) {
   app.use((req, res, next) => {
     if (!String(req.path || "").startsWith("/api/") || req.path === "/api/suivi/consommation") return next();
     const p = seaux2();
-    ajouter(p, "req");
+    const qui = lireJeton(req);
+    ajouterQui(p, qui, "req");
     enCours++;
     for (const s of p) if (enCours > s.pic) s.pic = enCours;
     const json = res.json;
@@ -164,7 +199,12 @@ module.exports = function installerConso(app, appId) {
     };
     res.on("finish", fin);
     res.on("close", fin);
-    next();
+    if (!qui) return next();
+    // L'enseignant suit la demande jusqu'aux appels à l'IA, y compris après la lecture du corps de la demande
+    // (les événements de lecture arrivent hors du contexte : on les y remet).
+    const emit = req.emit;
+    req.emit = function (...a) { return contexte.run(qui, () => emit.apply(this, a)); };
+    contexte.run(qui, next);
   });
 
   // --- Fichiers : un par processus, plus l'archive des processus arrêtés ------------------------
@@ -196,6 +236,10 @@ module.exports = function installerConso(app, appId) {
       t[k] = MAXIMA.has(k) ? Math.max(t[k], v) : t[k] + v;
     }
     for (const [k, v] of Object.entries(s.motifs || {})) if (Object.keys(t.motifs).length < 60 || t.motifs[k]) t.motifs[k] = (t.motifs[k] || 0) + (Number(v) || 0);
+    for (const [k, v] of Object.entries(s.ens || {})) {
+      const e = ens(t, k === SANS_COMPTE ? null : { cle: k, nom: v.nom });
+      for (const c of CHAMPS_ENS) e[c] += Number(v[c]) || 0;
+    }
   };
   /** Verse dans l'archive les fichiers des processus arrêtés depuis plus de 26 heures (un seul processus à la fois). */
   const archiver = () => {
@@ -314,6 +358,14 @@ module.exports = function installerConso(app, appId) {
       const s = tousJours.get(j);
       return { jour: j, ...ligne(s), iaMin: s.iaMin };
     });
+    // ?enseignants=AAAA-MM-JJ : chiffres de chaque enseignant depuis ce jour (aujourd'hui compris).
+    let parEnseignant;
+    const depuisJour = String(req.query.enseignants || "");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(depuisJour)) {
+      const t = { motifs: {}, ens: {} };
+      for (const [j, s] of tousJours) if (j >= depuisJour) ajouterTout(t, { ens: s.ens });
+      parEnseignant = Object.entries(t.ens).map(([cle, v]) => ({ cle, ...v }));
+    }
     const limites = {};
     for (const [k, v] of Object.entries(process.env)) if (/^(LIMITE_|AI_MAX_)/.test(k)) limites[k] = v;
     const vivants = autres.filter(d => d.vivant);
@@ -332,6 +384,7 @@ module.exports = function installerConso(app, appId) {
       minutes,
       heures,
       jours: listeJours,
+      ...(parEnseignant ? { depuisJour, parEnseignant } : {}),
       limites,
     });
   });

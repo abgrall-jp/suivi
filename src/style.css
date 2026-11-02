@@ -214,3 +214,5 @@ button.lien-nom:hover { text-decoration: underline; }
 .conso-duree { margin-top: 4px; font-size: 0.8em; padding: 1px 2px; font-weight: normal; }
 .conso-table tfoot th, .conso-table tfoot td { font-weight: 600; border-top: 2px solid currentColor; }
 .conso-table sup { font-size: 0.7em; margin-left: 1px; }
+.conso-ens { margin-top: 24px; } .conso-ens .barre input[type="search"] { max-width: 220px; }
+.conso-table td small { font-weight: normal; opacity: 0.75; }

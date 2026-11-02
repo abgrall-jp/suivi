@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.ts";
-import { cout, estPeriode, PERIODES, valeurs, type Alerte, type LigneApp, type Periode, type Seuils, type Valeurs } from "../lib/consommation.ts";
+import { cout, estPeriode, estPeriodeEns, PERIODES, PERIODES_ENS, valeurs, type Alerte, type LigneApp, type LigneEns, type Periode, type PeriodeEns, type Seuils, type Valeurs } from "../lib/consommation.ts";
 
 // Onglet « Consommation » (administrateur) : appels à l'IA, refus et erreurs de chaque application, relus chaque minute.
 
@@ -89,6 +89,7 @@ export function VueConsommation() {
       <Graphique minutes={d.minutes} />
 
       <Tableau d={d} />
+      <CoutEnseignants />
       {absentes.length > 0 && <p className="petit">Sans chiffres pour le moment : {absentes.map(a => a.nom).join(", ")}.</p>}
       <p className="petit">
         Chaque application garde ses chiffres minute par minute sur 24 heures et jour par jour sur un an, même après un redémarrage
@@ -206,6 +207,85 @@ function Tableau({ d }: { d: Reponse }) {
         </p>
       )}
     </>
+  );
+}
+
+type ReponseEns = { lu: number; periode: PeriodeEns; depuis: string; historiqueDepuis: string | null; enseignants: LigneEns[]; applis: string[]; sansDonnees: string[] };
+const CLE_PERIODE_ENS = "suivi-conso-periode-enseignants";
+
+/** Coût de l'IA par enseignant, toutes applications ensemble, sur la durée choisie. */
+function CoutEnseignants() {
+  const [periode, setPeriode] = useState<PeriodeEns>(() => {
+    try { const p = localStorage.getItem(CLE_PERIODE_ENS); if (estPeriodeEns(p)) return p; } catch { /* navigation privée */ }
+    return "30j";
+  });
+  const [d, setD] = useState<ReponseEns | null>(null);
+  const [msg, setMsg] = useState("");
+  const [filtre, setFiltre] = useState("");
+  useEffect(() => {
+    let fini = false;
+    setMsg("");
+    api<ReponseEns>(`/api/admin/consommation/enseignants?periode=${periode}`).then(r => { if (!fini) setD(r); }, e => { if (!fini) setMsg(e.message); });
+    return () => { fini = true; };
+  }, [periode]);
+  const choisir = (p: PeriodeEns) => {
+    setPeriode(p);
+    try { localStorage.setItem(CLE_PERIODE_ENS, p); } catch { /* navigation privée */ }
+  };
+  const f = filtre.trim().toLowerCase();
+  const lignes = (d?.enseignants || []).filter(l => !f || l.nom.toLowerCase().includes(f) || l.cle.includes(f));
+  const total = (d?.enseignants || []).reduce((n, l) => n + l.cout, 0);
+  const avecCompte = (d?.enseignants || []).filter(l => !l.sansCompte);
+  return (
+    <section className="conso-ens">
+      <div className="barre">
+        <h3>Coût par enseignant</h3>
+        <select value={periode} onChange={e => choisir(e.target.value as PeriodeEns)} aria-label="Durée">
+          {PERIODES_ENS.map(p => <option key={p.id} value={p.id}>{p.nom}</option>)}
+        </select>
+        <input type="search" placeholder="Chercher un enseignant" value={filtre} onChange={e => setFiltre(e.target.value)} />
+      </div>
+      {msg && <p className="erreur">{msg}</p>}
+      {!d && !msg && <p className="petit">Lecture des applications…</p>}
+      {d && (
+        <>
+          <p className="petit">
+            {avecCompte.length} enseignant{avecCompte.length > 1 ? "s" : ""}, dépense estimée {dollars(total)}
+            {periode === "auj" ? " aujourd'hui" : ` depuis le ${jourFr(d.depuis)}`}.
+            {d.historiqueDepuis && d.historiqueDepuis > d.depuis && <> Le suivi par enseignant a commencé le {jourFr(d.historiqueDepuis)}.</>}
+          </p>
+          {lignes.length === 0
+            ? <p className="petit">Aucun appel à l'IA sur cette durée{f ? " pour cette recherche" : ""}.</p>
+            : <div className="defile conso-table">
+              <table className="tableau">
+                <thead>
+                  <tr><th className="fixe">Enseignant</th><th>Dépense</th><th>Appels IA</th><th>Erreurs IA</th><th>Demandes</th><th className="gauche">Applications (dépense)</th></tr>
+                </thead>
+                <tbody>
+                  {lignes.map(l => (
+                    <tr key={l.cle} className={l.sansCompte ? "petit" : ""}>
+                      <td className="fixe" title={l.sansCompte ? "Demandes faites sans compte enseignant : élèves, visiteurs" : l.cle}>
+                        {l.nom}{!l.sansCompte && !l.connu && <small> (pas de fiche Suivi)</small>}
+                        {!l.sansCompte && l.nom !== l.cle && <><br /><small>{l.cle}</small></>}
+                      </td>
+                      <td>{dollars(l.cout)}</td>
+                      <td>{nb(l.ia)}</td>
+                      <td className={l.iaErr ? "faible" : ""}>{nb(l.iaErr)}</td>
+                      <td>{nb(l.req)}</td>
+                      <td className="gauche petit">{l.apps.filter(a => a.ia || a.cout).map(a => `${a.nom} ${dollars(a.cout)}`).join(" · ") || "–"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>}
+          <p className="petit">
+            L'enseignant est reconnu par le compte avec lequel il est connecté dans l'application ; ses différentes adresses sont
+            réunies quand il les a reliées dans Suivi. Le travail des élèves sans compte est compté à part, dans « Sans compte ».
+            {d.sansDonnees.length > 0 && <> Pas encore de chiffres par enseignant pour : {d.sansDonnees.join(", ")} (fichier conso.cjs à mettre à jour).</>}
+          </p>
+        </>
+      )}
+    </section>
   );
 }
 

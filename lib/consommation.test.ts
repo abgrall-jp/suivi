@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { estRapport, jourMoins, lireSeuils, synthese, valeurs, SEUILS_PAR_DEFAUT, type Compteurs, type LigneApp, type RapportApp } from "./consommation.ts";
+import { estRapport, jourMoins, lireSeuils, regrouperEnseignants, synthese, valeurs, SEUILS_PAR_DEFAUT, type Compteurs, type LigneApp, type RapportApp } from "./consommation.ts";
 
 const zero: Compteurs = { req: 0, pic: 0, r429: 0, r402: 0, e5xx: 0, ia: 0, iaErr: 0, ia429: 0, iaMs: 0, tokIn: 0, tokOut: 0 };
 const T = 1_800_000_000_000;
@@ -93,4 +93,17 @@ test("durées au choix : heure, 24 h, jours ; ancienne version sans historique",
   r.jours = r.jours.slice(1);
   assert.equal(valeurs(r, "3m")!.depuis, "2026-02-20");
   assert.equal(jourMoins("2026-03-01", 1), "2026-02-28");
+});
+
+test("coût par enseignant : comptes réunis d'une appli à l'autre, sans compte à la fin", () => {
+  const s = { ...SEUILS_PAR_DEFAUT, prixEntree: 1, prixSortie: 1 };
+  const e = (cle: string, ia: number, tok: number, nom?: string) => ({ cle, nom, req: ia, ia, iaErr: 0, tokIn: tok, tokOut: 0 });
+  const fiches: Record<string, { cle: string; nom: string }> = { "anne@ecole.fr": { cle: "anne@ecole.fr", nom: "Anne M." }, "evalia/anne.perso@gmail.com": { cle: "anne@ecole.fr", nom: "Anne M." } };
+  const r = regrouperEnseignants([
+    { id: "evalia", nom: "Eval IA", liste: [e("anne.perso@gmail.com", 2, 1_000_000), e("-", 50, 3_000_000)] },
+    { id: "quiz", nom: "Quiz IA", liste: [e("anne@ecole.fr", 1, 500_000), e("bob@ecole.fr", 9, 2_000_000, "Bob")] },
+  ], s, (app, cle) => fiches[`${app}/${cle}`] || fiches[cle]);
+  assert.deepEqual(r.map(l => [l.nom, l.ia, l.cout]), [["Bob", 9, 2], ["Anne M.", 3, 1.5], ["Sans compte (élèves, visiteurs)", 50, 3]]);
+  assert.equal(r[1].connu, true);
+  assert.deepEqual(r[1].apps.map(a => a.id), ["evalia", "quiz"]);
 });

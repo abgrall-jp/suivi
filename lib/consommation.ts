@@ -174,3 +174,54 @@ export function valeurs(r: RapportApp, p: Periode): Valeurs | null {
   if (premier > debut) v.depuis = premier;
   return v;
 }
+
+// --- Coût par enseignant ----------------------------------------------------------------------------
+
+/** Durées proposées pour le coût par enseignant (comptées en jours, aujourd'hui compris). */
+export const PERIODES_ENS = [
+  { id: "auj", nom: "Aujourd'hui", jours: 1 },
+  { id: "7j", nom: "7 jours", jours: 7 },
+  { id: "30j", nom: "30 jours", jours: 30 },
+  { id: "3m", nom: "3 mois", jours: 91 },
+  { id: "1an", nom: "1 an", jours: 365 },
+] as const;
+export type PeriodeEns = (typeof PERIODES_ENS)[number]["id"];
+export const estPeriodeEns = (p: unknown): p is PeriodeEns => PERIODES_ENS.some(x => x.id === p);
+
+/** Chiffres d'un enseignant dans une application, tels que conso.cjs les donne (cle = adresse, « - » = sans compte). */
+export type EnsApp = { cle: string; nom?: string; req: number; ia: number; iaErr: number; tokIn: number; tokOut: number };
+export type LigneEns = {
+  cle: string; nom: string; connu: boolean; sansCompte: boolean;
+  req: number; ia: number; iaErr: number; tokIn: number; tokOut: number; cout: number;
+  apps: { id: string; nom: string; ia: number; cout: number }[];
+};
+
+/**
+ * Additionne les enseignants de toutes les applications. trouver(appId, cle) donne la fiche Suivi de l'enseignant
+ * (adresse de son compte Suivi ou adresse reliée pour cette application), pour réunir ses comptes sous un seul nom.
+ */
+export function regrouperEnseignants(
+  parApp: { id: string; nom: string; liste: EnsApp[] }[], s: Seuils,
+  trouver: (appId: string, cle: string) => { cle: string; nom: string } | undefined = () => undefined,
+): LigneEns[] {
+  const lignes = new Map<string, LigneEns>();
+  for (const a of parApp) {
+    for (const e of a.liste) {
+      const sansCompte = e.cle === "-";
+      const f = sansCompte ? undefined : trouver(a.id, e.cle);
+      const cle = sansCompte ? "-" : f?.cle || e.cle;
+      let l = lignes.get(cle);
+      if (!l) {
+        l = { cle, nom: sansCompte ? "Sans compte (élèves, visiteurs)" : f?.nom || e.nom || e.cle, connu: !!f, sansCompte, req: 0, ia: 0, iaErr: 0, tokIn: 0, tokOut: 0, cout: 0, apps: [] };
+        lignes.set(cle, l);
+      }
+      const c = cout({ tokIn: Number(e.tokIn) || 0, tokOut: Number(e.tokOut) || 0 }, s);
+      for (const k of ["req", "ia", "iaErr", "tokIn", "tokOut"] as const) l[k] += Number(e[k]) || 0;
+      l.cout += c;
+      const ap = l.apps.find(x => x.id === a.id);
+      if (ap) { ap.ia += Number(e.ia) || 0; ap.cout += c; } else l.apps.push({ id: a.id, nom: a.nom, ia: Number(e.ia) || 0, cout: c });
+    }
+  }
+  for (const l of lignes.values()) l.apps.sort((x, y) => y.cout - x.cout || y.ia - x.ia);
+  return [...lignes.values()].sort((x, y) => Number(x.sansCompte) - Number(y.sansCompte) || y.cout - x.cout || y.ia - x.ia);
+}
