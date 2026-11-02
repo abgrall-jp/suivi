@@ -649,6 +649,10 @@ function VueCorrespondances({ onChange }: { onChange: (n: number) => void }) {
   const choisir = async (app: string, studentId: string, refId: string | null) => {
     try { await api("/api/correspondances", { app, studentId, refId }); charger(); } catch (e: any) { setMsg(e.message); }
   };
+  const ajouterALaListe = async (app: string, studentId: string, nom: string) => {
+    if (!confirm(`Ajouter « ${nom} » à la liste des élèves de l'établissement ? Ses notes des applications où il porte ce nom lui seront rattachées.`)) return;
+    try { await api("/api/eleves/ajouter", { app, studentId }); charger(); } catch (e: any) { setMsg(e.message); }
+  };
   const exclure = async (x: { eleves: string[]; classes: string[]; inclus?: string[] }) => {
     try { await api("/api/exclus", x); charger(); } catch (e: any) { setMsg(e.message); }
   };
@@ -747,6 +751,7 @@ function VueCorrespondances({ onChange }: { onChange: (n: number) => void }) {
                     {e.refId && <strong>{nomRef(e.refId)}</strong>}
                     {e.candidats.map(id => <button key={id} onClick={() => choisir(e.app, e.studentId, id)}>{nomRef(id)}</button>)}
                     <ChoixEleve refs={c.references} placeholder={e.refId ? "Changer : premières lettres…" : "Tapez les premières lettres…"} onChoix={r => choisir(e.app, e.studentId, r.id)} />
+                    {!e.refId && !c.provisoire && <button className="lien" title="Cet élève n'est pas dans la liste de l'établissement (compte de test, nouvel élève) : il y est ajouté avec ce nom et cette classe" onClick={() => ajouterALaListe(e.app, e.studentId, e.nom)}>ajouter à la liste</button>}
                     {e.statut !== "ignore" && <button className="lien" title="Compte de test, élève parti…" onClick={() => choisir(e.app, e.studentId, null)}>ne pas suivre</button>}
                   </div>
                 </td>

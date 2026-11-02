@@ -74,6 +74,20 @@ export const idEleve = (classe: string, nom: string, prenom: string) =>
   `${cleClasse(classe)}_${normaliser(nom).replace(/ /g, "-")}_${normaliser(prenom).replace(/ /g, "-")}`.slice(0, 150);
 
 /**
+ * Nom et prénom tirés d'un nom écrit dans une application (« MARTIN Léa », « Léa Martin », « élève test 201 »).
+ * Les mots en majuscules forment le nom ; sinon, le dernier mot. Tous les mots sont gardés, pour que
+ * le rapprochement retrouve exactement le même élève dans les autres applications.
+ */
+export function nomPrenomDepuis(nomApp: string): { nom: string; prenom: string } {
+  const mots = String(nomApp || "").trim().split(/\s+/).filter(Boolean);
+  if (mots.length <= 1) return { nom: mots[0] || "", prenom: "" };
+  const majuscule = (m: string) => /\p{L}/u.test(m) && m === m.toUpperCase() && m !== m.toLowerCase();
+  const nom = mots.filter(majuscule);
+  if (nom.length && nom.length < mots.length) return { nom: nom.join(" "), prenom: mots.filter(m => !majuscule(m)).join(" ") };
+  return { nom: mots[mots.length - 1], prenom: mots.slice(0, -1).join(" ") };
+}
+
+/**
  * Liste d'élèves collée depuis un tableur ou un fichier CSV : Classe ; Nom ; Prénom ; e-mail parent 1 ; e-mail parent 2
  * (séparateur ; , ou tabulation ; les e-mails sont facultatifs).
  */

@@ -6,7 +6,7 @@ import nodemailer from "nodemailer";
 import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
-import { classeEstUnNom, cleClasse, decider, lireListe, normaliser, type EleveRef } from "./lib/correspondance.ts";
+import { classeEstUnNom, cleClasse, decider, idEleve, lireListe, nomPrenomDepuis, normaliser, type EleveRef } from "./lib/correspondance.ts";
 import { APPLICATIONS, type Application } from "./lib/applications.ts";
 import { estRapport, lireSeuils, synthese, type LigneApp, estPeriodeEns, jourMoins, PERIODES_ENS, regrouperEnseignants, type EnsApp } from "./lib/consommation.ts";
 import { correspond, empreinte, genererMotDePasse } from "./lib/parents.ts";
@@ -901,6 +901,31 @@ app.post("/api/correspondances", exigerEnseignant(), route(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Ajouter à la liste de l'établissement un élève d'une application qui n'y est pas (compte de test, élève arrivé en cours d'année),
+// sans réimporter toute la liste. Il est relié à cet élève, et les autres applications où il porte le même nom le retrouvent seules.
+// Ces ajouts sont marqués « ajoute » : un nouvel import de la liste les garde.
+app.post("/api/eleves/ajouter", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const a = appParId(req.body?.app);
+  const studentId = texteCourt(req.body?.studentId, 200);
+  if (!a || !studentId) throw httpError(400, "Élève incorrect.");
+  const f = await fiche(e);
+  if (!f.apps?.[a.id]?.email) throw httpError(403, "Reliez d'abord cette application.");
+  const d = await donnees(a, f.apps[a.id].email);
+  const s = d.students.find(x => x.id === studentId);
+  if (!s) throw httpError(404, "Cet élève n'est pas dans vos classes.");
+  const c = d.classes.find(x => x.id === s.classId);
+  const classe = String(c?.name || s.className || "").trim().slice(0, 40);
+  const { nom, prenom } = nomPrenomDepuis(String(s.name || ""));
+  if (!classe || !nom) throw httpError(400, "Il faut un nom et une classe pour ajouter cet élève.");
+  const id = idEleve(classe, nom, prenom);
+  const ref = db.doc(`eleves/${id}`);
+  if (!(await ref.get()).exists) await ref.set({ classe, nom: nom.slice(0, 80), prenom: prenom.slice(0, 80), email1: "", email2: "", ajoute: true, par: e.email, le: new Date().toISOString() });
+  cacheRefs = null;
+  await db.doc(`correspondances/${cleCorr(a.id, studentId)}`).set({ refId: id, par: e.email, le: new Date().toISOString() });
+  res.json({ ok: true, id });
+}));
+
 // Corriger le nom et le prénom d'un élève (vides : revenir à ceux des applications).
 // corrections/{refId} : nom, prenom, par, le — valable pour tous les enseignants.
 app.post("/api/eleves/nom", exigerEnseignant(), route(async (req, res) => {
@@ -992,11 +1017,12 @@ app.post("/api/admin/eleves", exigerEnseignant(), route(async (req, res) => {
   const avant = await db.collection("eleves").get();
   const garder = new Set(eleves.map(x => x.id));
   const w = db.bulkWriter();
-  for (const d of avant.docs) if (!garder.has(d.id)) w.delete(d.ref);
+  // Les élèves ajoutés un par un (comptes de test...) restent : ils ne figurent pas dans le tableur de l'établissement.
+  for (const d of avant.docs) if (!garder.has(d.id) && d.get("ajoute") !== true) w.delete(d.ref);
   for (const x of eleves) w.set(db.doc(`eleves/${x.id}`), { classe: x.classe, nom: x.nom, prenom: x.prenom, email1: x.email1, email2: x.email2 });
   await w.close();
   cacheRefs = null;
-  res.json({ ok: true, nombre: eleves.length, retires: avant.docs.filter(d => !garder.has(d.id)).length });
+  res.json({ ok: true, nombre: eleves.length, retires: avant.docs.filter(d => !garder.has(d.id) && d.get("ajoute") !== true).length });
 }));
 
 // --- Parents : un mot de passe par parent, le même dans toutes les applications ---------------
