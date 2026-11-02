@@ -15,6 +15,7 @@ export const normaliser = (s: string) =>
   String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 const jetons = (s: string) => normaliser(s).split(" ").filter(Boolean);
+const nombres = (mots: string[]) => mots.filter(m => /\d/.test(m));
 
 /** « 5e B », « 5ème B » et « 5B » donnent tous « 5b ». */
 export const cleClasse = (s: string) => normaliser(s).replace(/\s+/g, "").replace(/^(\d+)(ieme|eme|em|e)?/, "$1");
@@ -39,7 +40,8 @@ export function comparer(nomApp: string, classeApp: string, ref: EleveRef): Nive
   const trie = (x: string[]) => [...x].sort().join(" ");
   let niveau: Niveau | null = null;
   if (trie(a) === trie(r)) niveau = "sur";
-  else if (Math.min(trie(a).length, trie(r).length) >= 6 && distance(trie(a), trie(r)) <= 1) niveau = "probable";
+  // Une faute de frappe, mais pas un autre nombre : « eleve test 201 » n'est pas « eleve test 401 ».
+  else if (Math.min(trie(a).length, trie(r).length) >= 6 && distance(trie(a), trie(r)) <= 1 && trie(nombres(a)) === trie(nombres(r))) niveau = "probable";
   else if (p.every(x => a.includes(x))) {
     const reste = a.filter(x => !p.includes(x));
     // « Léa M. » (initiale du nom) ou « Léa » seule.
