@@ -6,13 +6,13 @@ import nodemailer from "nodemailer";
 import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
-import { classeEstUnNom, cleClasse, decider, lireListe, normaliser, type EleveRef } from "./lib/correspondance.ts";
+import { classeEstUnNom, cleClasse, decider, idEleve, lireListe, nomPrenomDepuis, normaliser, type EleveRef } from "./lib/correspondance.ts";
 import { APPLICATIONS, type Application } from "./lib/applications.ts";
 import { estRapport, lireSeuils, synthese, type LigneApp, estPeriodeEns, jourMoins, PERIODES_ENS, regrouperEnseignants, type EnsApp } from "./lib/consommation.ts";
 import { correspond, empreinte, genererMotDePasse } from "./lib/parents.ts";
 import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, normaliserCode, signerJeton } from "./lib/famille.ts";
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
-import { noteDeResultat, trimestresCommences } from "./lib/sequenceur.ts";
+import { codesDeLEleve, noteDeResultat, trimestresCommences, type CodeClasse } from "./lib/sequenceur.ts";
 import { plansDe, remarquesParEleve, type PlanPublie, type RemarqueEleve } from "./lib/planclasse.ts";
 import { colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essaiRetenu, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
 
@@ -215,8 +215,8 @@ async function envoyerMail(a: string, sujet: string, texte: string) {
 
 // --- Données lues dans les applications (gardées 20 secondes) ------------------------------
 type Donnees = {
-  classes: { id: string; name: string }[];
-  students: { id: string; name: string; classId: string; className: string; provisionalPassword?: boolean; parentPasswords?: number[] }[];
+  classes: { id: string; name: string; code?: string; codeLibelle?: string }[];
+  students: { id: string; name: string; classId: string; className: string; provisionalPassword?: boolean; parentPasswords?: number[]; code?: string; codeLibelle?: string }[];
   exercises: { id: string; title: string }[];
   results: { id: string; studentId: string; exerciseId: string; exerciseTitle: string; percent: number; score: string; completedAt: number | null }[];
 };
@@ -587,7 +587,7 @@ async function calculerTableauSansMemo(e: Enseignant, frais = false) {
   });
   const presents = new Set(resultat.map(r => r.refId).filter((id): id is string => !!id && gardes.has(id)));
   return {
-    provisoire, refs, presents, essais, plusRecent, resultat,
+    provisoire, refs, presents, essais, plusRecent, resultat, lus,
     applications: lus.map(l => ({
       id: l.app.id, code: l.app.code, nom: l.app.nom, erreur: l.erreur,
       exercices: (l.d?.exercises || []).filter(x => l.d!.results.some(r => r.exerciseId === x.id)).map(x => ({ id: x.id, titre: x.title })),
@@ -901,6 +901,31 @@ app.post("/api/correspondances", exigerEnseignant(), route(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Ajouter à la liste de l'établissement un élève d'une application qui n'y est pas (compte de test, élève arrivé en cours d'année),
+// sans réimporter toute la liste. Il est relié à cet élève, et les autres applications où il porte le même nom le retrouvent seules.
+// Ces ajouts sont marqués « ajoute » : un nouvel import de la liste les garde.
+app.post("/api/eleves/ajouter", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const a = appParId(req.body?.app);
+  const studentId = texteCourt(req.body?.studentId, 200);
+  if (!a || !studentId) throw httpError(400, "Élève incorrect.");
+  const f = await fiche(e);
+  if (!f.apps?.[a.id]?.email) throw httpError(403, "Reliez d'abord cette application.");
+  const d = await donnees(a, f.apps[a.id].email);
+  const s = d.students.find(x => x.id === studentId);
+  if (!s) throw httpError(404, "Cet élève n'est pas dans vos classes.");
+  const c = d.classes.find(x => x.id === s.classId);
+  const classe = String(c?.name || s.className || "").trim().slice(0, 40);
+  const { nom, prenom } = nomPrenomDepuis(String(s.name || ""));
+  if (!classe || !nom) throw httpError(400, "Il faut un nom et une classe pour ajouter cet élève.");
+  const id = idEleve(classe, nom, prenom);
+  const ref = db.doc(`eleves/${id}`);
+  if (!(await ref.get()).exists) await ref.set({ classe, nom: nom.slice(0, 80), prenom: prenom.slice(0, 80), email1: "", email2: "", ajoute: true, par: e.email, le: new Date().toISOString() });
+  cacheRefs = null;
+  await db.doc(`correspondances/${cleCorr(a.id, studentId)}`).set({ refId: id, par: e.email, le: new Date().toISOString() });
+  res.json({ ok: true, id });
+}));
+
 // Corriger le nom et le prénom d'un élève (vides : revenir à ceux des applications).
 // corrections/{refId} : nom, prenom, par, le — valable pour tous les enseignants.
 app.post("/api/eleves/nom", exigerEnseignant(), route(async (req, res) => {
@@ -992,11 +1017,12 @@ app.post("/api/admin/eleves", exigerEnseignant(), route(async (req, res) => {
   const avant = await db.collection("eleves").get();
   const garder = new Set(eleves.map(x => x.id));
   const w = db.bulkWriter();
-  for (const d of avant.docs) if (!garder.has(d.id)) w.delete(d.ref);
+  // Les élèves ajoutés un par un (comptes de test...) restent : ils ne figurent pas dans le tableur de l'établissement.
+  for (const d of avant.docs) if (!garder.has(d.id) && d.get("ajoute") !== true) w.delete(d.ref);
   for (const x of eleves) w.set(db.doc(`eleves/${x.id}`), { classe: x.classe, nom: x.nom, prenom: x.prenom, email1: x.email1, email2: x.email2 });
   await w.close();
   cacheRefs = null;
-  res.json({ ok: true, nombre: eleves.length, retires: avant.docs.filter(d => !garder.has(d.id)).length });
+  res.json({ ok: true, nombre: eleves.length, retires: avant.docs.filter(d => !garder.has(d.id) && d.get("ajoute") !== true).length });
 }));
 
 // --- Parents : un mot de passe par parent, le même dans toutes les applications ---------------
@@ -1196,7 +1222,10 @@ app.post("/api/publier/tableau", exigerEnseignant(), route(async (req, res) => {
     type: "tableau", uid: e.uid, enseignant: await nomEnseignant(e), classe, classeNom: eleves[0].classe, publieLe, ...(seul ? { eleve: seul } : {}),
     colonnes, lignes, refIds: eleves.map(r => r.id), noms: Object.fromEntries(eleves.map(r => [r.id, { nom: r.nom, prenom: r.prenom, classe: r.classe }])),
   });
-  res.json({ ok: true, publieLe, eleves: eleves.length, colonnes: colonnes.length });
+  // Élèves de la classe qui ne reçoivent rien : sans aucun résultat rattaché dans les applications de l'enseignant
+  // (nom à vérifier dans « Noms des élèves », ou pas encore de compte). Dit à l'enseignant pour qu'il ne croie pas qu'ils l'ont.
+  const absents = seul ? [] : t.refs.filter(r => cleClasse(r.classe) === classe && !t.presents.has(r.id)).sort(parNom).map(r => `${r.prenom} ${r.nom}`.trim());
+  res.json({ ok: true, publieLe, eleves: eleves.length, colonnes: colonnes.length, noms: eleves.map(r => `${r.prenom} ${r.nom}`.trim()), absents });
 }));
 
 app.post("/api/publier/bulletin", exigerEnseignant(), route(async (req, res) => {
@@ -1659,6 +1688,7 @@ app.get("/api/sequenceur/eleve", exigerSequenceur(), route(async (req, res) => {
   const per = await periodes();
   const trimestres = trimestresCommences(per);
   const bulletins: any[] = [];
+  const codes: CodeClasse[] = [];
   let eleve: { prenom: string; nom: string; classe: string } | null = null;
   for (const { e } of comptes) {
     const t = await calculerTableau(e);
@@ -1666,6 +1696,10 @@ app.get("/api/sequenceur/eleve", exigerSequenceur(), route(async (req, res) => {
     const ref = refId ? t.refs.find(r => r.id === refId) : undefined;
     if (!ref) continue;
     eleve ||= { prenom: ref.prenom, nom: ref.nom, classe: ref.classe };
+    // Codes d'entrée de l'élève dans les autres applications (code de la classe, mot de passe enseignant), rappelés sous ses notes.
+    for (const c of codesDeLEleve(ref.id, t.resultat, t.lus.map(l => ({ app: l.app, d: l.d })))) {
+      if (!codes.some(x => x.appli === c.appli && x.code === c.code)) codes.push(c);
+    }
     const classe = cleClasse(ref.classe);
     const essais = t.essais.get(ref.id) || {};
     const docs = await db.getAll(...trimestres.flatMap(tr => [
@@ -1687,7 +1721,7 @@ app.get("/api/sequenceur/eleve", exigerSequenceur(), route(async (req, res) => {
     });
   }
   if (!eleve) throw Object.assign(httpError(404, "Élève pas encore rattaché dans Suivi."), { code: "ELEVE_INCONNU" });
-  res.json({ eleve, bulletins });
+  res.json({ eleve, bulletins, codes });
 }));
 
 async function startServer() {
