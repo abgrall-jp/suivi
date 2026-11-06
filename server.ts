@@ -39,7 +39,7 @@ import { colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essai
 // ---------------------------------------------------------------------------
 
 const PORT = Number(process.env.PORT) || 3000;
-const APP_VERSION = "2026-11-02.1";
+const APP_VERSION = "2026-11-06.1";
 
 function readJsonFile(fileName: string): any {
   try {

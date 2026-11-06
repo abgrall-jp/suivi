@@ -27,4 +27,5 @@ export const APPLICATIONS: Application[] = [
   { id: "organigrammes", code: "ORG", nom: "Organigrammes", url: "https://organigrammes.jepeuxapprendre.fr", eleves: true, parents: false },
   { id: "craft", code: "CRF", nom: "Craft", url: "https://craft.jepeuxapprendre.fr", eleves: false },
   { id: "generateurcraft", code: "GCR", nom: "Générateur Craft", url: "https://generateur-craft.jepeuxapprendre.fr", eleves: false },
+  { id: "bd", code: "BD", nom: "Créateur BD séquencée", url: "https://bd.jepeuxapprendre.fr", eleves: false },
 ];
