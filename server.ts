@@ -8,7 +8,7 @@ import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { classeEstUnNom, cleClasse, decider, lireListe, normaliser, type EleveRef } from "./lib/correspondance.ts";
 import { APPLICATIONS, type Application } from "./lib/applications.ts";
-import { estRapport, lireSeuils, synthese, type LigneApp, estPeriodeEns, jourMoins, PERIODES_ENS, regrouperEnseignants, type EnsApp } from "./lib/consommation.ts";
+import { estRapport, lireSeuils, synthese, type LigneApp, estPeriodeEns, jourMoins, PERIODES_ENS, regrouperEnseignants, type EnsApp, lireTauxBce } from "./lib/consommation.ts";
 import { correspond, empreinte, genererMotDePasse } from "./lib/parents.ts";
 import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, normaliserCode, signerJeton } from "./lib/famille.ts";
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
@@ -33,13 +33,13 @@ import { colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essai
 //                             (sinon fichier service-account-planclasse.json)
 //   PLANCLASSE_DATABASE_ID    base du Plan de classe IA (sinon plan-classe-eu, celle de la version o2switch)
 //   ADRESSE_PUBLIQUE          adresse de Suivi dans les e-mails (sinon https://suivi.jepeuxapprendre.fr)
-//   SEUIL_IA_PAR_MINUTE, SEUIL_SIMULTANEES, SEUIL_COUT_JOUR, SEUIL_ERREURS_HEURE, PRIX_IA_ENTREE, PRIX_IA_SORTIE
+//   SEUIL_IA_PAR_MINUTE, SEUIL_SIMULTANEES, SEUIL_COUT_JOUR, SEUIL_ERREURS_HEURE, PRIX_IA_ENTREE, PRIX_IA_SORTIE, EURO_PAR_DOLLAR (taux fixe ; sinon taux BCE relu chaque mois)
 //                             seuils de l'onglet Consommation (voir lib/consommation.ts) ; alerte à 80 %
 //   SUIVI_CONSO_<APPLI>       clé de lecture des compteurs d'une application sans porte de liaison (= SUIVI_CLE dans l'application)
 // ---------------------------------------------------------------------------
 
 const PORT = Number(process.env.PORT) || 3000;
-const APP_VERSION = "2026-11-07.1";
+const APP_VERSION = "2026-11-07.3";
 
 function readJsonFile(fileName: string): any {
   try {
@@ -1491,6 +1491,32 @@ app.post("/api/admin/trimestres", exigerEnseignant(), route(async (req, res) => 
 // Chaque application reliée donne ses compteurs (appels à l'IA, refus, erreurs) par /api/suivi/consommation,
 // avec sa clé de liaison. Les applications qui n'ont pas encore le fichier conso.cjs sont signalées « compteurs absents ».
 const seuilsConso = lireSeuils(process.env);
+// Taux de change : fixé par EURO_PAR_DOLLAR dans cPanel, sinon celui de la Banque centrale européenne,
+// relu une fois par mois (gardé dans Firestore, reglages/tauxChange, pour ne pas le relire à chaque redémarrage).
+seuilsConso.tauxSource = process.env.EURO_PAR_DOLLAR ? "réglé dans cPanel" : "par défaut";
+async function actualiserTaux() {
+  if (process.env.EURO_PAR_DOLLAR) return;
+  const ref = db.doc("reglages/tauxChange");
+  try {
+    const t = (await ref.get()).data();
+    if (t && Date.now() - Number(t.lu || 0) < 30 * 86400e3 && t.euroParDollar > 0) {
+      seuilsConso.euroParDollar = t.euroParDollar;
+      seuilsConso.tauxSource = `BCE du ${t.jour}`;
+      return;
+    }
+    const r = await fetch("https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml", { signal: AbortSignal.timeout(15000) });
+    const taux = r.ok ? lireTauxBce(await r.text()) : null;
+    if (!taux) throw new Error(`réponse ${r.status} illisible`);
+    seuilsConso.euroParDollar = taux.euroParDollar;
+    seuilsConso.tauxSource = `BCE du ${taux.jour}`;
+    cacheConso = null; cacheEns.clear();
+    await ref.set({ ...taux, lu: Date.now() });
+  } catch (e: any) {
+    console.error("Taux de change BCE non lu :", e?.message || e);
+  }
+}
+actualiserTaux();
+setInterval(actualiserTaux, 86400e3).unref();
 let cacheConso: { at: number; data: any } | null = null;
 let lectureConso: Promise<any> | null = null;
 // Clé de lecture des compteurs : la clé de liaison, ou SUIVI_CONSO_<APPLI> pour les applications sans porte de liaison
