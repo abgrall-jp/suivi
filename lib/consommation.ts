@@ -29,12 +29,13 @@ export type RapportApp = {
 export type Seuils = {
   iaParMinute: number;      // appels Gemini par minute, toutes applications ensemble (même clé Gemini)
   simultanees: number;      // demandes traitées en même temps chez o2switch (« Entry Processes »)
-  coutJour: number;         // dépense IA estimée sur 24 h, en dollars
+  coutJour: number;         // dépense IA estimée sur 24 h, en euros
   prixEntree: number;       // prix d'un million de jetons lus, en dollars
   prixSortie: number;       // prix d'un million de jetons écrits, en dollars
+  euroParDollar: number;    // taux de change : Google donne ses prix en dollars, Suivi affiche des euros
   erreursHeure: number;     // erreurs du serveur par heure et par application
 };
-export const SEUILS_PAR_DEFAUT: Seuils = { iaParMinute: 1000, simultanees: 80, coutJour: 30, prixEntree: 0.75, prixSortie: 3.75, erreursHeure: 5 };
+export const SEUILS_PAR_DEFAUT: Seuils = { iaParMinute: 1000, simultanees: 80, coutJour: 30, prixEntree: 0.75, prixSortie: 3.75, euroParDollar: 0.86, erreursHeure: 5 };
 
 export function lireSeuils(env: Record<string, string | undefined>): Seuils {
   const n = (cle: string, def: number) => {
@@ -48,6 +49,7 @@ export function lireSeuils(env: Record<string, string | undefined>): Seuils {
     coutJour: n("SEUIL_COUT_JOUR", d.coutJour),
     prixEntree: n("PRIX_IA_ENTREE", d.prixEntree),
     prixSortie: n("PRIX_IA_SORTIE", d.prixSortie),
+    euroParDollar: n("EURO_PAR_DOLLAR", d.euroParDollar),
     erreursHeure: n("SEUIL_ERREURS_HEURE", d.erreursHeure),
   };
 }
@@ -57,7 +59,8 @@ export const ALERTE = 0.8; // « attention » à 80 % d'un seuil
 export type Alerte = { niveau: "danger" | "attention"; app: string | null; texte: string };
 export type LigneApp = { id: string; nom: string; etat: "ok" | "absent" | "erreur"; message?: string; rapport?: RapportApp; cout24h?: number; cout1h?: number };
 
-export const cout = (c: Pick<Compteurs, "tokIn" | "tokOut">, s: Seuils) => (c.tokIn * s.prixEntree + c.tokOut * s.prixSortie) / 1e6;
+/** Dépense estimée en euros, d'après les jetons (prix Google en dollars convertis). */
+export const cout = (c: Pick<Compteurs, "tokIn" | "tokOut">, s: Seuils) => ((c.tokIn * s.prixEntree + c.tokOut * s.prixSortie) / 1e6) * s.euroParDollar;
 const pluriel = (n: number, mot: string) => `${n} ${mot}${n > 1 ? "s" : ""}`;
 
 /** Additionne les applications, calcule la dépense estimée et les alertes. */
@@ -97,7 +100,7 @@ export function synthese(lignes: LigneApp[], s: Seuils, maintenant = Date.now())
   // Limites communes à toutes les applications.
   seuil(total.picIaMinute, s.iaParMinute, p => `Appels à l'IA : jusqu'à ${total.picIaMinute} par minute dans l'heure, ${p} % du seuil (${s.iaParMinute} par minute, clé Gemini commune).`);
   seuil(total.picSimultanees, s.simultanees, p => `Jusqu'à ${total.picSimultanees} demandes traitées en même temps, ${p} % de la limite o2switch (${s.simultanees}).`);
-  seuil(total.cout24h, s.coutJour, p => `Dépense IA estimée sur 24 h : ${total.cout24h.toFixed(2)} $, ${p} % du seuil (${s.coutJour} $).`);
+  seuil(total.cout24h, s.coutJour, p => `Dépense IA estimée sur 24 h : ${total.cout24h.toFixed(2).replace(".", ",")} €, ${p} % du seuil (${s.coutJour} €).`);
 
   for (const l of lignes) {
     if (l.etat === "erreur") { alertes.push({ niveau: "danger", app: l.nom, texte: `Ne répond pas : ${l.message || "erreur"}` }); continue; }

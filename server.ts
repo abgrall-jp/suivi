@@ -33,13 +33,13 @@ import { colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essai
 //                             (sinon fichier service-account-planclasse.json)
 //   PLANCLASSE_DATABASE_ID    base du Plan de classe IA (sinon plan-classe-eu, celle de la version o2switch)
 //   ADRESSE_PUBLIQUE          adresse de Suivi dans les e-mails (sinon https://suivi.jepeuxapprendre.fr)
-//   SEUIL_IA_PAR_MINUTE, SEUIL_SIMULTANEES, SEUIL_COUT_JOUR, SEUIL_ERREURS_HEURE, PRIX_IA_ENTREE, PRIX_IA_SORTIE
+//   SEUIL_IA_PAR_MINUTE, SEUIL_SIMULTANEES, SEUIL_COUT_JOUR, SEUIL_ERREURS_HEURE, PRIX_IA_ENTREE, PRIX_IA_SORTIE, EURO_PAR_DOLLAR
 //                             seuils de l'onglet Consommation (voir lib/consommation.ts) ; alerte à 80 %
 //   SUIVI_CONSO_<APPLI>       clé de lecture des compteurs d'une application sans porte de liaison (= SUIVI_CLE dans l'application)
 // ---------------------------------------------------------------------------
 
 const PORT = Number(process.env.PORT) || 3000;
-const APP_VERSION = "2026-11-07.1";
+const APP_VERSION = "2026-11-07.2";
 
 function readJsonFile(fileName: string): any {
   try {

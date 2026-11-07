@@ -60,7 +60,7 @@ test("refus, crédits épuisés, quota Google et appli muette remontent en alert
 });
 
 test("dépense estimée d'après les jetons", () => {
-  const s = { ...SEUILS_PAR_DEFAUT, prixEntree: 1, prixSortie: 4, coutJour: 10 };
+  const s = { ...SEUILS_PAR_DEFAUT, prixEntree: 1, prixSortie: 4, coutJour: 10, euroParDollar: 1 };
   const r = synthese([{ id: "a", nom: "A", etat: "ok", rapport: rapport("a", { tokIn: 2_000_000, tokOut: 1_000_000 }) }], s, T);
   assert.equal(r.total.cout24h, 6);
   assert.equal(r.alertes.length, 0);
@@ -96,7 +96,7 @@ test("durées au choix : heure, 24 h, jours ; ancienne version sans historique",
 });
 
 test("coût par enseignant : comptes réunis d'une appli à l'autre, sans compte à la fin", () => {
-  const s = { ...SEUILS_PAR_DEFAUT, prixEntree: 1, prixSortie: 1 };
+  const s = { ...SEUILS_PAR_DEFAUT, prixEntree: 1, prixSortie: 1, euroParDollar: 1 };
   const e = (cle: string, ia: number, tok: number, nom?: string) => ({ cle, nom, req: ia, ia, iaErr: 0, tokIn: tok, tokOut: 0 });
   const fiches: Record<string, { cle: string; nom: string }> = { "anne@ecole.fr": { cle: "anne@ecole.fr", nom: "Anne M." }, "evalia/anne.perso@gmail.com": { cle: "anne@ecole.fr", nom: "Anne M." } };
   const r = regrouperEnseignants([
@@ -106,4 +106,13 @@ test("coût par enseignant : comptes réunis d'une appli à l'autre, sans compte
   assert.deepEqual(r.map(l => [l.nom, l.ia, l.cout]), [["Bob", 9, 2], ["Anne M.", 3, 1.5], ["Sans compte (élèves, visiteurs)", 50, 3]]);
   assert.equal(r[1].connu, true);
   assert.deepEqual(r[1].apps.map(a => a.id), ["evalia", "quiz"]);
+});
+
+test("dépense convertie en euros (taux réglable)", () => {
+  const s = { ...SEUILS_PAR_DEFAUT, prixEntree: 1, prixSortie: 1, euroParDollar: 0.9, coutJour: 100 };
+  const r = synthese([{ id: "a", nom: "A", etat: "ok", rapport: rapport("a", { tokIn: 1_000_000, tokOut: 1_000_000 }) }], s, T);
+  assert.equal(Math.round(r.total.cout24h * 100) / 100, 1.8);
+  assert.equal(lireSeuils({ EURO_PAR_DOLLAR: "0,92" }).euroParDollar, 0.92);
+  const r2 = synthese([{ id: "a", nom: "A", etat: "ok", rapport: rapport("a", { tokIn: 100_000_000, tokOut: 0 }) }], { ...s, coutJour: 100 }, T);
+  assert.match(r2.alertes[0].texte, /90,00 €, 90 % du seuil \(100 €\)/);
 });

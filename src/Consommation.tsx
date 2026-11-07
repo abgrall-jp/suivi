@@ -34,7 +34,7 @@ function lireDurees(): Record<Colonne, Periode> {
 const jourFr = (j: string) => new Date(j + "T12:00:00Z").toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
 
 const nb = (n: number) => n.toLocaleString("fr-FR");
-const dollars = (n: number) => (n < 0.01 && n > 0 ? "< 0,01 $" : `${n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`);
+const euros = (n: number) => (n < 0.01 && n > 0 ? "< 0,01 €" : `${n.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`);
 const heure = (t: number) => new Date(t).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 const depuis = (t: number) => {
   const m = Math.round((Date.now() - t) / 60e3);
@@ -81,7 +81,7 @@ export function VueConsommation() {
         <Tuile titre="Appels à l'IA, dernière heure" valeur={nb(t.ia1h)} detail={`${nb(t.ia24h)} sur 24 h`} />
         <Tuile titre="Pic par minute (toutes applis)" valeur={nb(t.picIaMinute)} detail={`seuil ${nb(s.iaParMinute)}`} niveau={niveau(t.picIaMinute, s.iaParMinute)} />
         <Tuile titre="Demandes en même temps, au plus" valeur={nb(t.picSimultanees)} detail={`limite o2switch ${s.simultanees}`} niveau={niveau(t.picSimultanees, s.simultanees)} />
-        <Tuile titre="Dépense IA estimée, 24 h" valeur={dollars(t.cout24h)} detail={`seuil ${s.coutJour} $ · ${dollars(t.cout1h)} dans l'heure`} niveau={niveau(t.cout24h, s.coutJour)} />
+        <Tuile titre="Dépense IA estimée, 24 h" valeur={euros(t.cout24h)} detail={`seuil ${s.coutJour} € · ${euros(t.cout1h)} dans l'heure`} niveau={niveau(t.cout24h, s.coutJour)} />
         <Tuile titre="Refus « Trop de demandes », 1 h" valeur={nb(t.r429h)} detail="limites des applications" niveau={t.r429h ? "attention" : undefined} />
         <Tuile titre="Crédits IA épuisés, 1 h" valeur={nb(t.r402h)} detail={`quota Google atteint : ${nb(t.ia429h)}`} niveau={t.r402h || t.ia429h ? "danger" : undefined} />
       </div>
@@ -94,9 +94,10 @@ export function VueConsommation() {
       <p className="petit">
         Chaque application garde ses chiffres minute par minute sur 24 heures et jour par jour sur un an, même après un redémarrage
         (la durée de chaque colonne se choisit dans son petit menu). La dépense est une estimation
-        d'après les jetons ({s.prixEntree} $ le million lus, {s.prixSortie} $ le million écrits) : la facture exacte est dans Google Cloud &gt; Facturation.
+        d'après les jetons, au prix de Google ({s.prixEntree} $ le million lus, {s.prixSortie} $ le million écrits) converti en euros
+        (1 $ = {String(s.euroParDollar).replace(".", ",")} €, réglable avec EURO_PAR_DOLLAR) : la facture exacte est dans Google Cloud &gt; Facturation.
         Les seuils se règlent dans cPanel, variables de Suivi : SEUIL_IA_PAR_MINUTE, SEUIL_SIMULTANEES, SEUIL_COUT_JOUR, SEUIL_ERREURS_HEURE,
-        PRIX_IA_ENTREE, PRIX_IA_SORTIE. Alerte à 80 % d'un seuil.
+        PRIX_IA_ENTREE, PRIX_IA_SORTIE, EURO_PAR_DOLLAR (SEUIL_COUT_JOUR est en euros). Alerte à 80 % d'un seuil.
       </p>
     </section>
   );
@@ -173,7 +174,7 @@ function Tableau({ d }: { d: Reponse }) {
                   {cellule("ia", v.ia, x => nb(x.ia))}
                   {cellule("picIa", v.picIa, x => (Number.isNaN(x.iaMin) ? "–" : nb(x.iaMin)))}
                   {cellule("reponse", v.reponse, x => moyenne(x.ia, x.iaMs))}
-                  {cellule("depense", v.depense, x => dollars(cout(x, d.seuils)))}
+                  {cellule("depense", v.depense, x => euros(cout(x, d.seuils)))}
                   {cellule("r429", v.r429, x => nb(x.r429), x => (x.r429 ? "moyen" : ""))}
                   {cellule("r402", v.r402, x => nb(x.r402), x => (x.r402 ? "faible" : ""))}
                   {cellule("erreurs", v.erreurs, x => `${nb(x.iaErr)} · ${nb(x.e5xx)}`, x => (x.ia429 || x.e5xx ? "faible" : ""))}
@@ -190,7 +191,7 @@ function Tableau({ d }: { d: Reponse }) {
               <td>{nb(total("ia", x => x.ia))}{manque("ia") && <sup>†</sup>}</td>
               <td title="Pic de l'application la plus chargée">{nb(Math.max(0, ...lignes.map(l => l.v.picIa?.iaMin || 0)))}</td>
               <td>{moyenne(total("reponse", x => x.ia), total("reponse", x => x.iaMs))}</td>
-              <td>{dollars(total("depense", x => cout(x, d.seuils)))}{manque("depense") && <sup>†</sup>}</td>
+              <td>{euros(total("depense", x => cout(x, d.seuils)))}{manque("depense") && <sup>†</sup>}</td>
               <td>{nb(total("r429", x => x.r429))}{manque("r429") && <sup>†</sup>}</td>
               <td>{nb(total("r402", x => x.r402))}{manque("r402") && <sup>†</sup>}</td>
               <td>{nb(total("erreurs", x => x.iaErr))} · {nb(total("erreurs", x => x.e5xx))}{manque("erreurs") && <sup>†</sup>}</td>
@@ -250,7 +251,7 @@ function CoutEnseignants() {
       {d && (
         <>
           <p className="petit">
-            {avecCompte.length} enseignant{avecCompte.length > 1 ? "s" : ""}, dépense estimée {dollars(total)}
+            {avecCompte.length} enseignant{avecCompte.length > 1 ? "s" : ""}, dépense estimée {euros(total)}
             {periode === "auj" ? " aujourd'hui" : ` depuis le ${jourFr(d.depuis)}`}.
             {d.historiqueDepuis && d.historiqueDepuis > d.depuis && <> Le suivi par enseignant a commencé le {jourFr(d.historiqueDepuis)}.</>}
           </p>
@@ -268,11 +269,11 @@ function CoutEnseignants() {
                         {l.nom}{!l.sansCompte && !l.connu && <small> (pas de fiche Suivi)</small>}
                         {!l.sansCompte && l.nom !== l.cle && <><br /><small>{l.cle}</small></>}
                       </td>
-                      <td>{dollars(l.cout)}</td>
+                      <td>{euros(l.cout)}</td>
                       <td>{nb(l.ia)}</td>
                       <td className={l.iaErr ? "faible" : ""}>{nb(l.iaErr)}</td>
                       <td>{nb(l.req)}</td>
-                      <td className="gauche petit">{l.apps.filter(a => a.ia || a.cout).map(a => `${a.nom} ${dollars(a.cout)}`).join(" · ") || "–"}</td>
+                      <td className="gauche petit">{l.apps.filter(a => a.ia || a.cout).map(a => `${a.nom} ${euros(a.cout)}`).join(" · ") || "–"}</td>
                     </tr>
                   ))}
                 </tbody>
