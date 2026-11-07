@@ -8,7 +8,7 @@ import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { classeEstUnNom, cleClasse, decider, lireListe, normaliser, type EleveRef } from "./lib/correspondance.ts";
 import { APPLICATIONS, type Application } from "./lib/applications.ts";
-import { estRapport, lireSeuils, synthese, type LigneApp } from "./lib/consommation.ts";
+import { estRapport, lireSeuils, synthese, type LigneApp, estPeriodeEns, jourMoins, PERIODES_ENS, regrouperEnseignants, type EnsApp } from "./lib/consommation.ts";
 import { correspond, empreinte, genererMotDePasse } from "./lib/parents.ts";
 import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, normaliserCode, signerJeton } from "./lib/famille.ts";
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
@@ -39,7 +39,7 @@ import { colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essai
 // ---------------------------------------------------------------------------
 
 const PORT = Number(process.env.PORT) || 3000;
-const APP_VERSION = "2026-10-31.2";
+const APP_VERSION = "2026-11-07.1";
 
 function readJsonFile(fileName: string): any {
   try {
@@ -1496,11 +1496,17 @@ let lectureConso: Promise<any> | null = null;
 // Clé de lecture des compteurs : la clé de liaison, ou SUIVI_CONSO_<APPLI> pour les applications sans porte de liaison
 // (outils de l'enseignant, Studio d'Appréciations, Plan de classe IA) : la même valeur que SUIVI_CLE dans l'application.
 const cleConso = (a: Application) => (parPorte(a) && cleDe(a)) || varApp("SUIVI_CONSO", a);
+// Une application peu utilisée est mise en veille par l'hébergeur : la première demande la redémarre,
+// ce qui peut prendre plus de 8 secondes. Sans réponse rapide, on attend donc une seconde fois, plus longtemps.
+async function lireCompteurs(a: Application, chemin: string) {
+  const essai = (ms: number) => fetch(urlDe(a) + chemin, { headers: { "X-Suivi-Cle": cleConso(a) }, signal: AbortSignal.timeout(ms) });
+  try { return await essai(8000); } catch { return await essai(30000); }
+}
 async function lireConsommation() {
   const lignes: LigneApp[] = await Promise.all(APPLICATIONS.map(async (a): Promise<LigneApp> => {
     if (!cleConso(a)) return { id: a.id, nom: a.nom, etat: "absent", message: `pas encore reliés (variable SUIVI_CONSO_${a.id.toUpperCase()} dans Suivi)` };
     try {
-      const r = await fetch(urlDe(a) + "/api/suivi/consommation", { headers: { "X-Suivi-Cle": cleConso(a) }, signal: AbortSignal.timeout(8000) });
+      const r = await lireCompteurs(a, "/api/suivi/consommation");
       let d: any = null;
       try { d = await r.json(); } catch {}
       if (r.ok && estRapport(d)) return { id: a.id, nom: a.nom, etat: "ok", rapport: d };
@@ -1508,7 +1514,7 @@ async function lireConsommation() {
       if (r.ok || r.status === 404) return { id: a.id, nom: a.nom, etat: "absent" };
       return { id: a.id, nom: a.nom, etat: "erreur", message: `erreur ${r.status}` };
     } catch (e: any) {
-      return { id: a.id, nom: a.nom, etat: "erreur", message: e?.name === "TimeoutError" ? "pas de réponse en 8 secondes" : "injoignable (application arrêtée ?)" };
+      return { id: a.id, nom: a.nom, etat: "erreur", message: e?.name === "TimeoutError" ? "pas de réponse en 40 secondes, même après une seconde tentative (application arrêtée ou bloquée ?)" : "injoignable (application arrêtée ?)" };
     }
   }));
   const s = synthese(lignes, seuilsConso);
@@ -1522,6 +1528,47 @@ app.get("/api/admin/consommation", exigerEnseignant(), route(async (req, res) =>
     cacheConso = { at: Date.now(), data: await lectureConso };
   }
   res.json(cacheConso.data);
+}));
+
+// Coût par enseignant : chaque application donne ses chiffres par enseignant depuis un jour donné (?enseignants=AAAA-MM-JJ).
+// Les adresses sont rapprochées des fiches Suivi (adresse du compte, ou adresse reliée pour l'application) pour réunir
+// les comptes d'un même enseignant sous son nom.
+const cacheEns = new Map<string, { at: number; data: any }>();
+const jourParis = (t = Date.now()) => new Intl.DateTimeFormat("fr-CA", { timeZone: "Europe/Paris", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(t));
+async function lireConsoEnseignants(periode: string) {
+  const n = PERIODES_ENS.find(p => p.id === periode)!.jours;
+  const depuis = jourMoins(jourParis(), n - 1);
+  const sansDonnees: string[] = [];
+  const parApp = (await Promise.all(APPLICATIONS.map(async a => {
+    if (!cleConso(a)) return null;
+    try {
+      const r = await lireCompteurs(a, `/api/suivi/consommation?enseignants=${depuis}`);
+      const d: any = r.ok ? await r.json().catch(() => null) : null;
+      if (!d || !Array.isArray(d.parEnseignant)) { sansDonnees.push(a.nom); return null; }
+      return { id: a.id, nom: a.nom, liste: d.parEnseignant as EnsApp[], premier: Array.isArray(d.jours) && d.jours[0]?.jour };
+    } catch { sansDonnees.push(a.nom); return null; }
+  }))).filter(x => !!x);
+  const fiches = new Map<string, { cle: string; nom: string }>();
+  for (const doc of (await db.collection("enseignants").get()).docs) {
+    const f = doc.data() || {};
+    const email = String(f.email || "").toLowerCase();
+    if (!email) continue;
+    const fiche = { cle: email, nom: String(f.nom || email) };
+    fiches.set(email, fiche);
+    for (const [app, v] of Object.entries<any>(f.apps || {})) if (v?.email) fiches.set(`${app}/${String(v.email).toLowerCase()}`, fiche);
+  }
+  const enseignants = regrouperEnseignants(parApp, seuilsConso, (app, cle) => fiches.get(`${app}/${cle}`) || fiches.get(cle));
+  const premiers = parApp.map(a => a.premier).filter(Boolean).sort();
+  return { lu: Date.now(), periode, depuis, historiqueDepuis: premiers[0] || null, seuils: seuilsConso, enseignants, applis: parApp.map(a => a.nom), sansDonnees };
+}
+app.get("/api/admin/consommation/enseignants", exigerEnseignant(), route(async (req, res) => {
+  if (!ensDe(req).isAdmin) throw httpError(403, "Réservé à l'administrateur.");
+  const periode = estPeriodeEns(req.query.periode) ? req.query.periode : "30j";
+  const c = cacheEns.get(periode);
+  if (c && Date.now() - c.at < 60000) return res.json(c.data);
+  const data = await lireConsoEnseignants(periode);
+  cacheEns.set(periode, { at: Date.now(), data });
+  res.json(data);
 }));
 
 // --- Pages ---------------------------------------------------------------------------------
