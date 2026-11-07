@@ -28,4 +28,5 @@ export const APPLICATIONS: Application[] = [
   { id: "craft", code: "CRF", nom: "Craft", url: "https://craft.jepeuxapprendre.fr", eleves: false },
   { id: "generateurcraft", code: "GCR", nom: "Générateur Craft", url: "https://generateur-craft.jepeuxapprendre.fr", eleves: false },
   { id: "bd", code: "BD", nom: "Créateur BD séquencée", url: "https://bd.jepeuxapprendre.fr", eleves: false },
+  { id: "exercicesimage", code: "EXI", nom: "Créateur d'exercices sur image", url: "https://exercices-image.jepeuxapprendre.fr", eleves: false },
 ];
