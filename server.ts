@@ -39,7 +39,7 @@ import { colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essai
 // ---------------------------------------------------------------------------
 
 const PORT = Number(process.env.PORT) || 3000;
-const APP_VERSION = "2026-11-06.1";
+const APP_VERSION = "2026-11-07.1";
 
 function readJsonFile(fileName: string): any {
   try {
@@ -1496,11 +1496,17 @@ let lectureConso: Promise<any> | null = null;
 // Clé de lecture des compteurs : la clé de liaison, ou SUIVI_CONSO_<APPLI> pour les applications sans porte de liaison
 // (outils de l'enseignant, Studio d'Appréciations, Plan de classe IA) : la même valeur que SUIVI_CLE dans l'application.
 const cleConso = (a: Application) => (parPorte(a) && cleDe(a)) || varApp("SUIVI_CONSO", a);
+// Une application peu utilisée est mise en veille par l'hébergeur : la première demande la redémarre,
+// ce qui peut prendre plus de 8 secondes. Sans réponse rapide, on attend donc une seconde fois, plus longtemps.
+async function lireCompteurs(a: Application, chemin: string) {
+  const essai = (ms: number) => fetch(urlDe(a) + chemin, { headers: { "X-Suivi-Cle": cleConso(a) }, signal: AbortSignal.timeout(ms) });
+  try { return await essai(8000); } catch { return await essai(30000); }
+}
 async function lireConsommation() {
   const lignes: LigneApp[] = await Promise.all(APPLICATIONS.map(async (a): Promise<LigneApp> => {
     if (!cleConso(a)) return { id: a.id, nom: a.nom, etat: "absent", message: `pas encore reliés (variable SUIVI_CONSO_${a.id.toUpperCase()} dans Suivi)` };
     try {
-      const r = await fetch(urlDe(a) + "/api/suivi/consommation", { headers: { "X-Suivi-Cle": cleConso(a) }, signal: AbortSignal.timeout(8000) });
+      const r = await lireCompteurs(a, "/api/suivi/consommation");
       let d: any = null;
       try { d = await r.json(); } catch {}
       if (r.ok && estRapport(d)) return { id: a.id, nom: a.nom, etat: "ok", rapport: d };
@@ -1508,7 +1514,7 @@ async function lireConsommation() {
       if (r.ok || r.status === 404) return { id: a.id, nom: a.nom, etat: "absent" };
       return { id: a.id, nom: a.nom, etat: "erreur", message: `erreur ${r.status}` };
     } catch (e: any) {
-      return { id: a.id, nom: a.nom, etat: "erreur", message: e?.name === "TimeoutError" ? "pas de réponse en 8 secondes" : "injoignable (application arrêtée ?)" };
+      return { id: a.id, nom: a.nom, etat: "erreur", message: e?.name === "TimeoutError" ? "pas de réponse en 40 secondes, même après une seconde tentative (application arrêtée ou bloquée ?)" : "injoignable (application arrêtée ?)" };
     }
   }));
   const s = synthese(lignes, seuilsConso);
@@ -1536,7 +1542,7 @@ async function lireConsoEnseignants(periode: string) {
   const parApp = (await Promise.all(APPLICATIONS.map(async a => {
     if (!cleConso(a)) return null;
     try {
-      const r = await fetch(`${urlDe(a)}/api/suivi/consommation?enseignants=${depuis}`, { headers: { "X-Suivi-Cle": cleConso(a) }, signal: AbortSignal.timeout(10000) });
+      const r = await lireCompteurs(a, `/api/suivi/consommation?enseignants=${depuis}`);
       const d: any = r.ok ? await r.json().catch(() => null) : null;
       if (!d || !Array.isArray(d.parEnseignant)) { sansDonnees.push(a.nom); return null; }
       return { id: a.id, nom: a.nom, liste: d.parEnseignant as EnsApp[], premier: Array.isArray(d.jours) && d.jours[0]?.jour };
