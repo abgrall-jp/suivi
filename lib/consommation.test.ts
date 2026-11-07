@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { estRapport, jourMoins, lireSeuils, regrouperEnseignants, synthese, valeurs, SEUILS_PAR_DEFAUT, type Compteurs, type LigneApp, type RapportApp } from "./consommation.ts";
+import { estRapport, jourMoins, lireSeuils, lireTauxBce, regrouperEnseignants, synthese, valeurs, SEUILS_PAR_DEFAUT, type Compteurs, type LigneApp, type RapportApp } from "./consommation.ts";
 
 const zero: Compteurs = { req: 0, pic: 0, r429: 0, r402: 0, e5xx: 0, ia: 0, iaErr: 0, ia429: 0, iaMs: 0, tokIn: 0, tokOut: 0 };
 const T = 1_800_000_000_000;
@@ -115,4 +115,10 @@ test("dépense convertie en euros (taux réglable)", () => {
   assert.equal(lireSeuils({ EURO_PAR_DOLLAR: "0,92" }).euroParDollar, 0.92);
   const r2 = synthese([{ id: "a", nom: "A", etat: "ok", rapport: rapport("a", { tokIn: 100_000_000, tokOut: 0 }) }], { ...s, coutJour: 100 }, T);
   assert.match(r2.alertes[0].texte, /90,00 €, 90 % du seuil \(100 €\)/);
+});
+
+test("taux de la BCE : 1 € = 1,0812 $, donc 1 $ = 0,9249 €", () => {
+  const xml = `<gesmes:Envelope><Cube><Cube time='2026-11-06'><Cube currency='USD' rate='1.0812'/><Cube currency='JPY' rate='160.5'/></Cube></Cube></gesmes:Envelope>`;
+  assert.deepEqual(lireTauxBce(xml), { euroParDollar: 0.9249, jour: "2026-11-06" });
+  assert.equal(lireTauxBce("<html>erreur</html>"), null);
 });

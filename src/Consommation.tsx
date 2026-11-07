@@ -95,7 +95,7 @@ export function VueConsommation() {
         Chaque application garde ses chiffres minute par minute sur 24 heures et jour par jour sur un an, même après un redémarrage
         (la durée de chaque colonne se choisit dans son petit menu). La dépense est une estimation
         d'après les jetons, au prix de Google ({s.prixEntree} $ le million lus, {s.prixSortie} $ le million écrits) converti en euros
-        (1 $ = {String(s.euroParDollar).replace(".", ",")} €, réglable avec EURO_PAR_DOLLAR) : la facture exacte est dans Google Cloud &gt; Facturation.
+        (1 $ = {String(s.euroParDollar).replace(".", ",")} €, {s.tauxSource || "taux par défaut"} ; taux de la BCE relu chaque mois, ou fixé avec EURO_PAR_DOLLAR) : la facture exacte est dans Google Cloud &gt; Facturation.
         Les seuils se règlent dans cPanel, variables de Suivi : SEUIL_IA_PAR_MINUTE, SEUIL_SIMULTANEES, SEUIL_COUT_JOUR, SEUIL_ERREURS_HEURE,
         PRIX_IA_ENTREE, PRIX_IA_SORTIE, EURO_PAR_DOLLAR (SEUIL_COUT_JOUR est en euros). Alerte à 80 % d'un seuil.
       </p>

@@ -33,6 +33,7 @@ export type Seuils = {
   prixEntree: number;       // prix d'un million de jetons lus, en dollars
   prixSortie: number;       // prix d'un million de jetons écrits, en dollars
   euroParDollar: number;    // taux de change : Google donne ses prix en dollars, Suivi affiche des euros
+  tauxSource?: string;      // d'où vient le taux : « BCE du AAAA-MM-JJ », « réglé dans cPanel » ou « par défaut »
   erreursHeure: number;     // erreurs du serveur par heure et par application
 };
 export const SEUILS_PAR_DEFAUT: Seuils = { iaParMinute: 1000, simultanees: 80, coutJour: 30, prixEntree: 0.75, prixSortie: 3.75, euroParDollar: 0.86, erreursHeure: 5 };
@@ -227,4 +228,13 @@ export function regrouperEnseignants(
   }
   for (const l of lignes.values()) l.apps.sort((x, y) => y.cout - x.cout || y.ia - x.ia);
   return [...lignes.values()].sort((x, y) => Number(x.sansCompte) - Number(y.sansCompte) || y.cout - x.cout || y.ia - x.ia);
+}
+
+/** Taux de référence de la Banque centrale européenne (fichier eurofxref-daily.xml) : euros pour 1 dollar, et sa date. */
+export function lireTauxBce(xml: string): { euroParDollar: number; jour: string } | null {
+  const usd = /currency=['"]USD['"]\s+rate=['"]([\d.]+)['"]/.exec(xml);
+  const jour = /time=['"](\d{4}-\d{2}-\d{2})['"]/.exec(xml);
+  const r = usd ? Number(usd[1]) : NaN;
+  if (!jour || !Number.isFinite(r) || r < 0.5 || r > 2) return null;
+  return { euroParDollar: Math.round((1 / r) * 10000) / 10000, jour: jour[1] };
 }
