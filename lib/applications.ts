@@ -22,10 +22,13 @@ export const APPLICATIONS: Application[] = [
   { id: "quiz", code: "QUIZ", nom: "Quiz IA", url: "https://quiz.jepeuxapprendre.fr", eleves: true },
   { id: "edublockly", code: "EBK", nom: "EduBlockly Micro:bit", url: "https://edublockly.jepeuxapprendre.fr", eleves: true, parents: false },
   { id: "categorisation", code: "CAT", nom: "Catégorisation de mots", url: "https://categorisation.jepeuxapprendre.fr", eleves: true },
+  { id: "motsmagiques", code: "MMG", nom: "Mots Magiques", url: "https://motsmagiques.jepeuxapprendre.fr", eleves: true, parents: false },
   { id: "conception", code: "CNC", nom: "Assistant Conception Pédagogique", url: "https://conception.jepeuxapprendre.fr", eleves: false },
   { id: "maths", code: "MTH", nom: "Générateur de Problèmes de Maths", url: "https://maths-pb.jepeuxapprendre.fr", eleves: false },
   { id: "motsmeles", code: "MML", nom: "Mots mêlés", url: "https://motsmeles.jepeuxapprendre.fr", eleves: false },
   { id: "organigrammes", code: "ORG", nom: "Organigrammes", url: "https://organigrammes.jepeuxapprendre.fr", eleves: true, parents: false },
   { id: "craft", code: "CRF", nom: "Craft", url: "https://craft.jepeuxapprendre.fr", eleves: false },
   { id: "generateurcraft", code: "GCR", nom: "Générateur Craft", url: "https://generateur-craft.jepeuxapprendre.fr", eleves: false },
+  { id: "bd", code: "BD", nom: "Créateur BD séquencée", url: "https://bd.jepeuxapprendre.fr", eleves: false },
+  { id: "exercicesimage", code: "EXI", nom: "Créateur d'exercices sur image", url: "https://exercices-image.jepeuxapprendre.fr", eleves: false },
 ];

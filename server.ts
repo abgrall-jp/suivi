@@ -8,7 +8,7 @@ import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { classeEstUnNom, cleClasse, decider, idEleve, lireListe, nomPrenomDepuis, normaliser, type EleveRef } from "./lib/correspondance.ts";
 import { APPLICATIONS, type Application } from "./lib/applications.ts";
-import { estRapport, lireSeuils, synthese, type LigneApp, estPeriodeEns, jourMoins, PERIODES_ENS, regrouperEnseignants, type EnsApp } from "./lib/consommation.ts";
+import { estRapport, lireSeuils, synthese, type LigneApp, estPeriodeEns, jourMoins, PERIODES_ENS, regrouperEnseignants, type EnsApp, lireTauxBce } from "./lib/consommation.ts";
 import { correspond, empreinte, genererMotDePasse } from "./lib/parents.ts";
 import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, normaliserCode, signerJeton } from "./lib/famille.ts";
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
@@ -33,13 +33,13 @@ import { colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essai
 //                             (sinon fichier service-account-planclasse.json)
 //   PLANCLASSE_DATABASE_ID    base du Plan de classe IA (sinon plan-classe-eu, celle de la version o2switch)
 //   ADRESSE_PUBLIQUE          adresse de Suivi dans les e-mails (sinon https://suivi.jepeuxapprendre.fr)
-//   SEUIL_IA_PAR_MINUTE, SEUIL_SIMULTANEES, SEUIL_COUT_JOUR, SEUIL_ERREURS_HEURE, PRIX_IA_ENTREE, PRIX_IA_SORTIE
+//   SEUIL_IA_PAR_MINUTE, SEUIL_SIMULTANEES, SEUIL_COUT_JOUR, SEUIL_ERREURS_HEURE, PRIX_IA_ENTREE, PRIX_IA_SORTIE, EURO_PAR_DOLLAR (taux fixe ; sinon taux BCE relu chaque mois)
 //                             seuils de l'onglet Consommation (voir lib/consommation.ts) ; alerte à 80 %
 //   SUIVI_CONSO_<APPLI>       clé de lecture des compteurs d'une application sans porte de liaison (= SUIVI_CLE dans l'application)
 // ---------------------------------------------------------------------------
 
 const PORT = Number(process.env.PORT) || 3000;
-const APP_VERSION = "2026-11-02.1";
+const APP_VERSION = "2026-11-08.1";
 
 function readJsonFile(fileName: string): any {
   try {
@@ -1520,16 +1520,48 @@ app.post("/api/admin/trimestres", exigerEnseignant(), route(async (req, res) => 
 // Chaque application reliée donne ses compteurs (appels à l'IA, refus, erreurs) par /api/suivi/consommation,
 // avec sa clé de liaison. Les applications qui n'ont pas encore le fichier conso.cjs sont signalées « compteurs absents ».
 const seuilsConso = lireSeuils(process.env);
+// Taux de change : fixé par EURO_PAR_DOLLAR dans cPanel, sinon celui de la Banque centrale européenne,
+// relu une fois par mois (gardé dans Firestore, reglages/tauxChange, pour ne pas le relire à chaque redémarrage).
+seuilsConso.tauxSource = process.env.EURO_PAR_DOLLAR ? "réglé dans cPanel" : "par défaut";
+async function actualiserTaux() {
+  if (process.env.EURO_PAR_DOLLAR) return;
+  const ref = db.doc("reglages/tauxChange");
+  try {
+    const t = (await ref.get()).data();
+    if (t && Date.now() - Number(t.lu || 0) < 30 * 86400e3 && t.euroParDollar > 0) {
+      seuilsConso.euroParDollar = t.euroParDollar;
+      seuilsConso.tauxSource = `BCE du ${t.jour}`;
+      return;
+    }
+    const r = await fetch("https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml", { signal: AbortSignal.timeout(15000) });
+    const taux = r.ok ? lireTauxBce(await r.text()) : null;
+    if (!taux) throw new Error(`réponse ${r.status} illisible`);
+    seuilsConso.euroParDollar = taux.euroParDollar;
+    seuilsConso.tauxSource = `BCE du ${taux.jour}`;
+    cacheConso = null; cacheEns.clear();
+    await ref.set({ ...taux, lu: Date.now() });
+  } catch (e: any) {
+    console.error("Taux de change BCE non lu :", e?.message || e);
+  }
+}
+actualiserTaux();
+setInterval(actualiserTaux, 86400e3).unref();
 let cacheConso: { at: number; data: any } | null = null;
 let lectureConso: Promise<any> | null = null;
 // Clé de lecture des compteurs : la clé de liaison, ou SUIVI_CONSO_<APPLI> pour les applications sans porte de liaison
 // (outils de l'enseignant, Studio d'Appréciations, Plan de classe IA) : la même valeur que SUIVI_CLE dans l'application.
 const cleConso = (a: Application) => (parPorte(a) && cleDe(a)) || varApp("SUIVI_CONSO", a);
+// Une application peu utilisée est mise en veille par l'hébergeur : la première demande la redémarre,
+// ce qui peut prendre plus de 8 secondes. Sans réponse rapide, on attend donc une seconde fois, plus longtemps.
+async function lireCompteurs(a: Application, chemin: string) {
+  const essai = (ms: number) => fetch(urlDe(a) + chemin, { headers: { "X-Suivi-Cle": cleConso(a) }, signal: AbortSignal.timeout(ms) });
+  try { return await essai(8000); } catch { return await essai(30000); }
+}
 async function lireConsommation() {
   const lignes: LigneApp[] = await Promise.all(APPLICATIONS.map(async (a): Promise<LigneApp> => {
     if (!cleConso(a)) return { id: a.id, nom: a.nom, etat: "absent", message: `pas encore reliés (variable SUIVI_CONSO_${a.id.toUpperCase()} dans Suivi)` };
     try {
-      const r = await fetch(urlDe(a) + "/api/suivi/consommation", { headers: { "X-Suivi-Cle": cleConso(a) }, signal: AbortSignal.timeout(8000) });
+      const r = await lireCompteurs(a, "/api/suivi/consommation");
       let d: any = null;
       try { d = await r.json(); } catch {}
       if (r.ok && estRapport(d)) return { id: a.id, nom: a.nom, etat: "ok", rapport: d };
@@ -1537,7 +1569,7 @@ async function lireConsommation() {
       if (r.ok || r.status === 404) return { id: a.id, nom: a.nom, etat: "absent" };
       return { id: a.id, nom: a.nom, etat: "erreur", message: `erreur ${r.status}` };
     } catch (e: any) {
-      return { id: a.id, nom: a.nom, etat: "erreur", message: e?.name === "TimeoutError" ? "pas de réponse en 8 secondes" : "injoignable (application arrêtée ?)" };
+      return { id: a.id, nom: a.nom, etat: "erreur", message: e?.name === "TimeoutError" ? "pas de réponse en 40 secondes, même après une seconde tentative (application arrêtée ou bloquée ?)" : "injoignable (application arrêtée ?)" };
     }
   }));
   const s = synthese(lignes, seuilsConso);
@@ -1565,7 +1597,7 @@ async function lireConsoEnseignants(periode: string) {
   const parApp = (await Promise.all(APPLICATIONS.map(async a => {
     if (!cleConso(a)) return null;
     try {
-      const r = await fetch(`${urlDe(a)}/api/suivi/consommation?enseignants=${depuis}`, { headers: { "X-Suivi-Cle": cleConso(a) }, signal: AbortSignal.timeout(10000) });
+      const r = await lireCompteurs(a, `/api/suivi/consommation?enseignants=${depuis}`);
       const d: any = r.ok ? await r.json().catch(() => null) : null;
       if (!d || !Array.isArray(d.parEnseignant)) { sansDonnees.push(a.nom); return null; }
       return { id: a.id, nom: a.nom, liste: d.parEnseignant as EnsApp[], premier: Array.isArray(d.jours) && d.jours[0]?.jour };
