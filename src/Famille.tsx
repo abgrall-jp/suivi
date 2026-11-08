@@ -69,13 +69,30 @@ function ConnexionFamille({ onOk, onChanger }: { onOk: (e: Enfant[]) => void; on
   useEffect(() => {
     fetch("/api/famille/annuaire").then(r => r.json()).then(d => setAnnuaire(d.enseignants || [])).catch(() => setAnnuaire([]));
   }, []);
-  const classes = annuaire?.find(e => e.uid === ens)?.classes || [];
+  // Arrivée depuis le Séquenceur (clic sur une note) : enseignant, classe et élève déjà choisis, même si la liste
+  // de l'accueil ne les contient pas encore (élève ajouté depuis, compte de test...).
+  const [venu] = useState(() => {
+    const p = new URLSearchParams(location.search);
+    const v = { ens: p.get("ens") || "", classe: p.get("classe") || "", classeNom: p.get("classeNom") || "", eleve: p.get("eleve") || "", nom: p.get("nom") || "" };
+    return v.ens && v.classe && v.eleve ? v : null;
+  });
+  useEffect(() => { if (venu) { setEns(venu.ens); setClasse(venu.classe); } }, [venu]);
+  const ensChoisi = annuaire?.find(e => e.uid === ens);
+  const classes0 = ensChoisi?.classes || [];
+  const classes = venu && ens === venu.ens && !classes0.some(c => c.cle === venu.classe)
+    ? [...classes0, { cle: venu.classe, nom: venu.classeNom || venu.classe }] : classes0;
+  const enseignants = venu && annuaire && !annuaire.some(e => e.uid === venu.ens) ? [...annuaire, { uid: venu.ens, nom: "Mon enseignant", classes: [] }] : annuaire;
   useEffect(() => {
     setEleves(null); setRefId("");
     if (!ens || !classe) return;
+    const avecVenu = (liste: { id: string; nom: string }[]) => {
+      if (!venu || ens !== venu.ens || classe !== venu.classe) return liste;
+      setRefId(venu.eleve);
+      return liste.some(x => x.id === venu.eleve) ? liste : [...liste, { id: venu.eleve, nom: venu.nom || "Moi" }];
+    };
     fetch(`/api/famille/annuaire/eleves?enseignant=${encodeURIComponent(ens)}&classe=${encodeURIComponent(classe)}`)
-      .then(r => r.json()).then(d => setEleves(d.eleves || [])).catch(() => setEleves([]));
-  }, [ens, classe]);
+      .then(r => r.json()).then(d => setEleves(avecVenu(Array.isArray(d.eleves) ? d.eleves : []))).catch(() => setEleves(avecVenu([])));
+  }, [ens, classe, venu]);
   const envoyer = async (ev: FormEvent) => {
     ev.preventDefault();
     setMsg(""); setOccupe(true);
@@ -97,8 +114,8 @@ function ConnexionFamille({ onOk, onChanger }: { onOk: (e: Enfant[]) => void; on
         {mode === "liste" && <>
           <label className="etape">1. {tu ? "Ton enseignant" : "L'enseignant"}
             <select value={ens} onChange={e => { setEns(e.target.value); setClasse(""); }} required>
-              <option value="">{annuaire === null ? "Chargement…" : annuaire.length ? "Choisir…" : "Aucun enseignant pour l'instant"}</option>
-              {(annuaire || []).map(e => <option key={e.uid} value={e.uid}>{e.nom}</option>)}
+              <option value="">{enseignants === null ? "Chargement…" : enseignants.length ? "Choisir…" : "Aucun enseignant pour l'instant"}</option>
+              {(enseignants || []).map(e => <option key={e.uid} value={e.uid}>{e.nom}</option>)}
             </select>
           </label>
           <label className="etape">2. {tu ? "Ta classe" : "La classe"}

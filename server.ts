@@ -1722,12 +1722,18 @@ app.get("/api/sequenceur/eleve", exigerSequenceur(), route(async (req, res) => {
   const bulletins: any[] = [];
   const codes: CodeClasse[] = [];
   let eleve: { prenom: string; nom: string; classe: string } | null = null;
+  // Accueil élève de Suivi déjà réglé sur cet élève (enseignant, classe, nom) : il n'a plus qu'à taper son mot de passe.
+  let chemin = "";
   for (const { e } of comptes) {
     const t = await calculerTableau(e);
     const refId = t.resultat.find(r => r.app === "sequenceur" && r.refId && ids.includes(r.studentId))?.refId;
     const ref = refId ? t.refs.find(r => r.id === refId) : undefined;
     if (!ref) continue;
     eleve ||= { prenom: ref.prenom, nom: ref.nom, classe: ref.classe };
+    if (!chemin) {
+      const q = new URLSearchParams({ qui: "eleve", ens: e.uid, classe: cleClasse(ref.classe), classeNom: ref.classe, eleve: ref.id, nom: `${ref.prenom} ${ref.nom.trim().charAt(0).toUpperCase()}.`.trim() });
+      chemin = `/famille?${q.toString()}`;
+    }
     // Codes d'entrée de l'élève dans les autres applications (code de la classe, mot de passe enseignant), rappelés sous ses notes.
     for (const c of codesDeLEleve(ref.id, t.resultat, t.lus.map(l => ({ app: l.app, d: l.d })))) {
       if (!codes.some(x => x.appli === c.appli && x.code === c.code)) codes.push(c);
@@ -1753,7 +1759,7 @@ app.get("/api/sequenceur/eleve", exigerSequenceur(), route(async (req, res) => {
     });
   }
   if (!eleve) throw Object.assign(httpError(404, "Élève pas encore rattaché dans Suivi."), { code: "ELEVE_INCONNU" });
-  res.json({ eleve, bulletins, codes });
+  res.json({ eleve, bulletins, codes, chemin });
 }));
 
 async function startServer() {
