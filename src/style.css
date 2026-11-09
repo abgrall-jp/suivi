@@ -219,3 +219,4 @@ button.lien-nom:hover { text-decoration: underline; }
 .conso-table td small { font-weight: normal; opacity: 0.75; }
 .bulletin th .gel { display: block; }
 .bulletin td.figee input.note { font-weight: 600; }
+.alerte-essais { color: #fdd663; font-weight: 600; margin: 0; }

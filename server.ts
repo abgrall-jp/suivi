@@ -1398,10 +1398,10 @@ app.post("/api/famille/codes", exigerEnseignant(), route(async (req, res) => {
 
 // Essais de mot de passe : 10 par quart d'heure pour un même élève depuis une même adresse (toute une classe
 // partage souvent la même adresse au collège), et 300 au total par adresse.
-const limiteFamille = makeLimiter(10, 15 * 60 * 1000);
+const limiteFamille = makeLimiter(10, 5 * 60 * 1000); // 10 essais, blocage 5 minutes (annoncé sous le mot de passe)
 const limiteFamilleIp = makeLimiter(300, 15 * 60 * 1000);
 const essaiFamille = (ip: string, qui: unknown) => {
-  if (!limiteFamilleIp(ip) || !limiteFamille(`${ip}|${String(qui ?? "").slice(0, 200).toLowerCase()}`)) throw httpError(429, "Trop d'essais. Réessayez dans un quart d'heure.");
+  if (!limiteFamilleIp(ip) || !limiteFamille(`${ip}|${String(qui ?? "").slice(0, 200).toLowerCase()}`)) throw httpError(429, "Trop d'essais. Réessayez dans 5 minutes.");
 };
 
 // Prénom et initiale du nom (« Alice D. ») ; le nom entier seulement si deux élèves de la classe s'appelleraient pareil.

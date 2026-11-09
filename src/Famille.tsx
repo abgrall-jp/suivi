@@ -135,6 +135,7 @@ function ConnexionFamille({ onOk, onChanger }: { onOk: (e: Enfant[]) => void; on
         {mode === "email" && <input type="email" placeholder="Adresse e-mail" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email" />}
         <label className="etape">{mode === "liste" ? "4. " : ""}Mot de passe
           <input type="password" placeholder={mode === "email" ? "Mot de passe parent" : "Mot de passe du Séquenceur"} value={mdp} onChange={e => setMdp(e.target.value)} required autoComplete="current-password" />
+          <p className="petit alerte-essais">⚠️ Attention : après 10 essais ratés, la connexion est bloquée 5 minutes.</p>
         </label>
         <button type="submit" className="principal" disabled={occupe}>Entrer</button>
       </form>
