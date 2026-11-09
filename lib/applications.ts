@@ -25,7 +25,7 @@ export const APPLICATIONS: Application[] = [
   { id: "motsmagiques", code: "MMG", nom: "Mots Magiques", url: "https://motsmagiques.jepeuxapprendre.fr", eleves: true, parents: false },
   { id: "conception", code: "CNC", nom: "Assistant Conception Pédagogique", url: "https://conception.jepeuxapprendre.fr", eleves: false },
   { id: "maths", code: "MTH", nom: "Générateur de Problèmes de Maths", url: "https://maths-pb.jepeuxapprendre.fr", eleves: false },
-  { id: "motsmeles", code: "MML", nom: "Mots mêlés", url: "https://motsmeles.jepeuxapprendre.fr", eleves: false },
+  { id: "motsmeles", code: "MML", nom: "Mots mêlés", url: "https://motsmeles.jepeuxapprendre.fr", eleves: true },
   { id: "organigrammes", code: "ORG", nom: "Organigrammes", url: "https://organigrammes.jepeuxapprendre.fr", eleves: true, parents: false },
   { id: "craft", code: "CRF", nom: "Craft", url: "https://craft.jepeuxapprendre.fr", eleves: false },
   { id: "generateurcraft", code: "GCR", nom: "Générateur Craft", url: "https://generateur-craft.jepeuxapprendre.fr", eleves: false },
