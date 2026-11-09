@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { colonnesManuelles, dateDansTrimestre, essaiQuiCompte, lireNote, moyenne, noteSur20, periodesParDefaut } from "./bulletin.ts";
+import { appliquerGel, colonnesFigees, colonnesManuelles, dateDansTrimestre, essaiQuiCompte, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut } from "./bulletin.ts";
 
 test("trimestres de l'année scolaire", () => {
   assert.deepEqual(periodesParDefaut(new Date("2026-10-24")), {
@@ -56,4 +56,21 @@ test("note saisie remplacée seulement si l'élève fait mieux ensuite", () => {
   assert.equal(essaiQuiCompte([m, { percent: 40, at: 200 }])?.percent, 60); // moins bien, après : la note saisie reste
   assert.equal(essaiQuiCompte([{ percent: 90, at: 50 }, m])?.percent, 60); // mieux, mais avant la saisie : la note saisie compte
   assert.equal(essaiQuiCompte([{ percent: 30, at: 50 }, { percent: 70, at: 60 }])?.percent, 70); // sans saisie : le dernier essai
+});
+
+test("colonne figée : la note gelée remplace les essais, sauf pour un élève défigé", () => {
+  const per = { debut: "2026-09-01", fin: "2026-11-30" };
+  const at = Date.parse("2026-10-10T10:00:00Z");
+  const essais = { "a:1": [{ percent: 100, at }], "a:2": [{ percent: 50, at }] };
+  const gels = { "a:1": { le: "x", notes: { e1: 12, e2: null }, sauf: ["e3"] } };
+  const g1 = appliquerGel(essais, gels, "e1");
+  assert.equal(noteColonne(g1["a:1"], per), 12);
+  assert.equal(noteColonne(g1["a:2"], per), 10);
+  assert.equal(noteSur20(g1, ["a:1", "a:2"], per), 11);
+  assert.equal(noteColonne(appliquerGel(essais, gels, "e2")["a:1"], per), null);
+  assert.equal(noteColonne(appliquerGel(essais, gels, "e3")["a:1"], per), 20);
+  // Élève arrivé après le gel : pas dans les notes figées, sa note suit les applications.
+  assert.equal(noteColonne(appliquerGel(essais, gels, "e4")["a:1"], per), 20);
+  assert.deepEqual(colonnesFigees(gels, [{ cle: "a:1" }, { cle: "a:2" }], "e1"), ["a:1"]);
+  assert.deepEqual(colonnesFigees(gels, [{ cle: "a:1" }], "e3"), []);
 });

@@ -14,7 +14,7 @@ import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, normalis
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
 import { codesDeLEleve, noteDeResultat, trimestresCommences, type CodeClasse } from "./lib/sequenceur.ts";
 import { plansDe, remarquesParEleve, type PlanPublie, type RemarqueEleve } from "./lib/planclasse.ts";
-import { colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essaiRetenu, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
+import { appliquerGel, colonnesFigees, type GelColonne, colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essaiRetenu, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
 
 // ---------------------------------------------------------------------------
 // Serveur de Suivi, le suivi global des applications Je peux apprendre (hébergement o2switch).
@@ -693,6 +693,7 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
     .map((c: any) => ({ cle: String(c.cle), app: String(c.app || ""), titre: titreDe.get(c.cle) || String(c.titre || ""), coef: lireCoef(c.coef) }));
   const externes: { id: string; titre: string }[] = Array.isArray(b.externes) ? b.externes : [];
   const notes: Record<string, any> = b.eleves || {};
+  const gels: Record<string, GelColonne> = b.gels || {};
   const f = await fiche(e);
   let studio = new Map<string, TextesStudio>();
   if (f.apps?.appreciations) {
@@ -707,13 +708,14 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
   }
   const eleves = refsClasse.map(r => {
     const n = notes[r.id] || {};
-    const essais = t.essais.get(r.id) || {};
+    const essais = appliquerGel(t.essais.get(r.id) || {}, gels, r.id);
     const calculee = colonnes.length ? noteSur20(essais, colonnes, per[trimestre]) : null;
     return {
       id: r.id, nom: r.nom, prenom: r.prenom, calculee,
       notes: Object.fromEntries(colonnes.map(c => [c.cle, noteColonne(essais[c.cle], per[trimestre])])),
       manuelles: colonnesManuelles(essais, colonnes, per[trimestre]),
       autres: Object.fromEntries(colonnes.flatMap(c => { const a = autreNote(essais[c.cle], per[trimestre]); return a ? [[c.cle, a]] : []; })),
+      figees: colonnesFigees(gels, colonnes, r.id),
       finale: typeof n.finale === "number" ? n.finale : null, figeeLe: n.figeeLe || null,
       externes: n.externes || {}, appreciation: appreciationDe(n, studio.get(r.id)?.prof?.texte), appreciationEcrite: typeof n.appreciation === "string",
       studio: { eleve: studio.get(r.id)?.eleve?.texte || "", prof: studio.get(r.id)?.prof?.texte || "" },
@@ -732,7 +734,7 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
   }
   res.json({
     periodes: per, classes, colonnesDispo, trimestre, classe,
-    colonnes, externes, eleves, studioRelie: !!f.apps?.appreciations,
+    colonnes: colonnes.map(c => ({ ...c, figeeLe: gels[c.cle]?.le || null })), externes, eleves, studioRelie: !!f.apps?.appreciations,
     publieLe: (await db.doc(`publications/${e.uid}__bulletin__${trimestre}__${classe}`).get()).get("publieLe") || null,
     publieesEleves: Object.fromEntries((await db.collection("publications").where("uid", "==", e.uid).get()).docs.map(d => d.data())
       .filter(d => d.type === "bulletin" && d.eleve && d.trimestre === trimestre && d.classe === classe).map(d => [String(d.eleve), String(d.publieLe)])),
@@ -799,11 +801,62 @@ app.post("/api/bulletin/figer", exigerEnseignant(), route(async (req, res) => {
   const le = new Date().toISOString();
   for (const r of elevesDeClasse(t, classe)) {
     if (typeof b.eleves?.[r.id]?.finale === "number") continue;
-    const n = noteSur20(t.essais.get(r.id) || {}, b.colonnes, per[trimestre]);
+    const n = noteSur20(appliquerGel(t.essais.get(r.id) || {}, b.gels, r.id), b.colonnes, per[trimestre]);
     if (n !== null) maj[r.id] = { finale: n, figeeLe: le };
   }
   await ref.set({ eleves: maj, majLe: le }, { merge: true });
   res.json({ ok: true, figees: Object.keys(maj).length });
+}));
+
+// Figer une colonne : la note de chaque élève de la classe ne suit plus les applications.
+// defiger : la colonne suit de nouveau les applications pour toute la classe.
+app.post("/api/bulletin/figer-colonne", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const { trimestre, classe } = lireTrimestreClasse(req.body);
+  const cle = texteCourt(req.body?.cle, 300);
+  const ref = db.doc(`bulletins/${idBulletin(e.uid, trimestre, classe)}`);
+  const b = (await ref.get()).data();
+  if (!b?.colonnes?.some((c: any) => c.cle === cle)) throw httpError(404, "Cette colonne n'est pas dans le bulletin.");
+  if (req.body?.defiger) {
+    await ref.set({ gels: { [cle]: FieldValue.delete() }, majLe: new Date().toISOString() }, { merge: true });
+    return res.json({ ok: true });
+  }
+  const per = await periodes();
+  const t = await calculerTableau(e);
+  const notes: Record<string, number | null> = {};
+  for (const r of elevesDeClasse(t, classe)) notes[r.id] = noteColonne(t.essais.get(r.id)?.[cle], per[trimestre]);
+  const le = new Date().toISOString();
+  await ref.set({ gels: { [cle]: { le, notes, sauf: [] } }, majLe: le }, { merge: true });
+  res.json({ ok: true, figees: Object.values(notes).filter(n => n !== null).length });
+}));
+
+// Dans une colonne figée, un élève : le défiger (sa note suit de nouveau les applications), le refiger
+// (sur sa note du moment), ou changer sa note figée.
+app.post("/api/bulletin/figer-eleve", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const { trimestre, classe } = lireTrimestreClasse(req.body);
+  const cle = texteCourt(req.body?.cle, 300);
+  const refId = texteCourt(req.body?.refId, 200);
+  const ref = db.doc(`bulletins/${idBulletin(e.uid, trimestre, classe)}`);
+  const b = (await ref.get()).data();
+  const gel: GelColonne | undefined = b?.gels?.[cle];
+  if (!gel) throw httpError(404, "Cette colonne n'est pas figée.");
+  const t = await calculerTableau(e);
+  if (!elevesDeClasse(t, classe).some(r => r.id === refId)) throw httpError(404, "Cet élève n'est pas dans cette classe.");
+  const sauf = new Set(gel.sauf || []);
+  const notes = { ...(gel.notes || {}) };
+  if (req.body?.defiger) sauf.add(refId);
+  else {
+    let n: number | null | undefined;
+    if ("note" in (req.body || {})) n = lireNote(req.body.note);
+    else n = noteColonne(t.essais.get(refId)?.[cle], (await periodes())[trimestre]);
+    if (n === undefined) throw httpError(400, "La note doit être entre 0 et 20.");
+    notes[refId] = n; sauf.delete(refId);
+  }
+  // Remplace toute la colonne figée (merge garderait d'anciennes clés de notes).
+  await ref.set({ gels: { [cle]: FieldValue.delete() } }, { merge: true });
+  await ref.set({ gels: { [cle]: { ...gel, notes, sauf: [...sauf] } }, majLe: new Date().toISOString() }, { merge: true });
+  res.json({ ok: true });
 }));
 
 // Note saisie à la main dans une colonne (tableau ou bulletin) : note sur 20, ou vide pour l'effacer.
@@ -1245,7 +1298,7 @@ app.post("/api/publier/bulletin", exigerEnseignant(), route(async (req, res) => 
   const eleves: Record<string, any> = {};
   for (const r of refs) {
     const n = b.eleves?.[r.id] || {};
-    const ess = t.essais.get(r.id) || {};
+    const ess = appliquerGel(t.essais.get(r.id) || {}, b.gels, r.id);
     const calculee = noteSur20(ess, colonnes, per[trimestre]);
     eleves[r.id] = {
       notes: Object.fromEntries(colonnes.map(c => [c.cle, noteColonne(ess[c.cle], per[trimestre])])),
@@ -1739,7 +1792,7 @@ app.get("/api/sequenceur/eleve", exigerSequenceur(), route(async (req, res) => {
       if (!codes.some(x => x.appli === c.appli && x.code === c.code)) codes.push(c);
     }
     const classe = cleClasse(ref.classe);
-    const essais = t.essais.get(ref.id) || {};
+    const essaisEleve = t.essais.get(ref.id) || {};
     const docs = await db.getAll(...trimestres.flatMap(tr => [
       db.doc(`bulletins/${idBulletin(e.uid, tr, classe)}`), db.doc(`publications/${e.uid}__bulletin__${tr}__${classe}`),
       db.doc(`publications/${e.uid}__bulletin__${tr}__${classe}__eleve__${ref.id}`),
@@ -1750,6 +1803,7 @@ app.get("/api/sequenceur/eleve", exigerSequenceur(), route(async (req, res) => {
       const pub = plusRecentes([docs[3 * i + 1].data(), docs[3 * i + 2].data()].filter(Boolean))[0];
       const colonnes = (b.colonnes as any[]).map(c => ({ cle: String(c.cle), app: String(c.app || ""), titre: String(c.titre || ""), coef: lireCoef(c.coef) }));
       const finale = b.eleves?.[ref.id]?.finale;
+      const essais = appliquerGel(essaisEleve, b.gels, ref.id);
       bulletins.push({
         trimestre: tr, enseignant: String(b.nom || ""), periode: per[tr],
         colonnes: colonnes.map(c => ({ ...c, note: noteColonne(essais[c.cle], per[tr]) })),

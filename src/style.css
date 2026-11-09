@@ -217,3 +217,5 @@ button.lien-nom:hover { text-decoration: underline; }
 .conso-table sup { font-size: 0.7em; margin-left: 1px; }
 .conso-ens { margin-top: 24px; } .conso-ens .barre input[type="search"] { max-width: 220px; }
 .conso-table td small { font-weight: normal; opacity: 0.75; }
+.bulletin th .gel { display: block; }
+.bulletin td.figee input.note { font-weight: 600; }

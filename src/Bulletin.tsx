@@ -5,10 +5,10 @@ import { BoutonPublier } from "./Famille.tsx";
 
 type Trimestre = "T1" | "T2" | "T3";
 type Periodes = Record<Trimestre, { debut: string; fin: string }>;
-type Colonne = { cle: string; app: string; titre: string; coef?: number };
+type Colonne = { cle: string; app: string; titre: string; coef?: number; figeeLe?: string | null };
 type Externe = { id: string; titre: string };
 type LigneBulletin = {
-  id: string; nom: string; prenom: string; calculee: number | null; notes?: Record<string, number | null>; manuelles?: string[]; autres?: Record<string, { note: number | null; manuelle: boolean }>; finale: number | null; figeeLe: string | null;
+  id: string; nom: string; prenom: string; calculee: number | null; notes?: Record<string, number | null>; manuelles?: string[]; autres?: Record<string, { note: number | null; manuelle: boolean }>; figees?: string[]; finale: number | null; figeeLe: string | null;
   externes: Record<string, number | null>; appreciation: string; appreciationEcrite?: boolean; studio?: { eleve: string; prof: string };
   remarques?: { date: string; seance: string; texte: string }[];
 };
@@ -109,6 +109,16 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
     a.click();
   };
 
+  const figerColonne = async (cle: string, defiger: boolean) => {
+    if (!defiger && !confirm("Figer cette colonne : la note de chaque élève ne bougera plus si ses résultats changent. Vous pourrez la changer à la main, ou défiger un élève. Continuer ?")) return;
+    setMsg("");
+    try { await api("/api/bulletin/figer-colonne", { trimestre, classe, cle, defiger }); await charger(); } catch (e: any) { setMsg(e.message); }
+  };
+  const figerEleve = async (refId: string, cle: string, quoi: { defiger?: boolean; note?: string }) => {
+    setMsg("");
+    try { await api("/api/bulletin/figer-eleve", { trimestre, classe, cle, refId, ...quoi }); await charger(true); } catch (e: any) { setMsg(e.message); }
+  };
+
   const decaler = (sens: number) => defile.current?.scrollBy({ left: sens * Math.max(300, defile.current.clientWidth * 0.7), behavior: "smooth" });
 
   return (
@@ -134,7 +144,7 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
       {pret && (
         <>
           {!b.studioRelie && <p className="petit">Pour voir ici les appréciations écrites dans le Studio d'Appréciations, reliez-le dans « Mes applications ».</p>}
-          <details className="petit aide-bulletin"><summary>Comment sont calculées les notes ?</summary>Chaque colonne montre la note sur 20 du dernier essai du trimestre ; la moyenne calculée en tient compte avec les coefficients. Une note perdue ou absente ? Écrivez-la dans la case : elle apparaît <span className="manuelle-legende">en violet</span>. Si une case a deux notes (celle de l'application et celle saisie), c'est la note saisie qui compte, sauf si l'élève a fait mieux ensuite dans l'application ; l'autre est affichée à côté en petit. Écrivez une note définitive, ou cliquez sur « Figer les notes » : elle ne sera plus mise à jour par le logiciel, mais vous pourrez toujours la changer.</details>
+          <details className="petit aide-bulletin"><summary>Comment sont calculées les notes ?</summary>Chaque colonne montre la note sur 20 du dernier essai du trimestre ; la moyenne calculée en tient compte avec les coefficients. Une note perdue ou absente ? Écrivez-la dans la case : elle apparaît <span className="manuelle-legende">en violet</span>. Si une case a deux notes (celle de l'application et celle saisie), c'est la note saisie qui compte, sauf si l'élève a fait mieux ensuite dans l'application ; l'autre est affichée à côté en petit. Écrivez une note définitive, ou cliquez sur « Figer les notes » : elle ne sera plus mise à jour par le logiciel, mais vous pourrez toujours la changer. Pour ne figer qu'une colonne, cliquez sur « figer » sous son titre ; 🔓 dans une case défige cet élève seulement, 🔒 le refige.</details>
           <div className="defile" ref={defile}>
             <table className="tableau bulletin">
               <thead><tr>
@@ -143,7 +153,10 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
                   <span className="coef">coef. <ChampCoef valeur={c.coef ?? 1} onValider={async v => {
                     setMsg("");
                     try { await api("/api/bulletin/colonnes", { trimestre, classe, colonnes: colonnes.map(x => (x.cle === c.cle ? { ...x, coef: v } : x)), externes }); await charger(); } catch (e: any) { setMsg(e.message); }
-                  }} /></span></th>)}
+                  }} /></span>
+                  <span className="coef gel">{c.figeeLe
+                    ? <button className="lien" title={`Colonne figée le ${new Date(c.figeeLe).toLocaleDateString("fr-FR")} : cliquer pour qu'elle suive de nouveau les applications`} onClick={() => figerColonne(c.cle, true)}>🔒 figée</button>
+                    : <button className="lien" title="Figer cette colonne : les notes ne bougeront plus si les résultats changent" onClick={() => figerColonne(c.cle, false)}>figer</button>}</span></th>)}
                 <th>Moyenne calculée</th><th>Définitive</th>
                 {externes.map(x => <th key={x.id}>{x.titre}</th>)}
                 <th>Appréciation de l'élève<span className="coef">Studio, partie élève</span></th>
@@ -158,9 +171,15 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
                         onRetirer={async () => { try { await api("/api/publier/bulletin", { trimestre, classe, refId: e.id, retirer: true }); await charger(); } catch (err: any) { setMsg(err.message); } }} /></span></td>
                     {colonnes.map(c => {
                       const manuelle = !!e.manuelles?.includes(c.cle);
+                      const figee = !!e.figees?.includes(c.cle);
+                      if (figee) return <td key={c.cle} className="figee" title="Note figée : elle ne suit plus les applications (vous pouvez la changer)">
+                        <ChampNote valeur={e.notes?.[c.cle] ?? null} indication="–" onValider={v => figerEleve(e.id, c.cle, { note: v })} />
+                        <button className="lien" title="Défiger pour cet élève : sa note suit de nouveau les applications" onClick={() => figerEleve(e.id, c.cle, { defiger: true })}>🔓</button>
+                      </td>;
                       return <td key={c.cle} className={manuelle ? "manuelle" : ""} title={manuelle ? "Note saisie à la main" : "Note des applications (saisir une note pour la remplacer)"}>
                         <ChampNote valeur={e.notes?.[c.cle] ?? null} indication="–" onValider={v => saisirNote(e.id, c.cle, v, manuelle)} />
                         <AutreNote autre={e.autres?.[c.cle]} onEffacer={() => saisirNote(e.id, c.cle, "", true)} />
+                        {c.figeeLe && <button className="lien" title="Refiger cet élève sur sa note actuelle" onClick={() => figerEleve(e.id, c.cle, {})}>🔒</button>}
                       </td>;
                     })}
                     <td><strong>{note(e.calculee) || "–"}</strong></td>

@@ -107,3 +107,32 @@ export function moyenne(notes: (number | null | undefined)[]): number | null {
   const v = notes.filter((n): n is number => typeof n === "number");
   return v.length ? Math.round((v.reduce((s, n) => s + n, 0) / v.length) * 10) / 10 : null;
 }
+
+/**
+ * Colonne figée : la note de chaque élève au moment du gel (null = pas de note), qui ne suit plus les applications.
+ * « sauf » : élèves défigés un par un, dont la note suit de nouveau les applications.
+ */
+export type GelColonne = { le: string; notes: Record<string, number | null>; sauf?: string[] };
+
+/** La colonne est-elle figée pour cet élève ? */
+export const estFigee = (gel: GelColonne | undefined, refId: string) =>
+  !!gel && !(gel.sauf || []).includes(refId) && Object.prototype.hasOwnProperty.call(gel.notes || {}, refId);
+
+/**
+ * Résultats d'un élève après gel : pour chaque colonne figée pour lui, sa note figée remplace les essais
+ * (un essai sans date, qui compte dans tout trimestre), ou plus rien si la note figée est vide.
+ */
+export function appliquerGel<T extends Essai>(essais: Record<string, T[]>, gels: Record<string, GelColonne> | undefined, refId: string): Record<string, T[]> {
+  if (!gels) return essais;
+  const res: Record<string, T[]> = { ...essais };
+  for (const [cle, gel] of Object.entries(gels)) {
+    if (!estFigee(gel, refId)) continue;
+    const n = gel.notes[refId];
+    res[cle] = typeof n === "number" ? [{ percent: n * 5, at: null, score: `${n}/20` } as unknown as T] : [];
+  }
+  return res;
+}
+
+/** Colonnes figées pour cet élève, parmi celles du bulletin. */
+export const colonnesFigees = (gels: Record<string, GelColonne> | undefined, colonnes: { cle: string }[], refId: string) =>
+  colonnes.filter(c => estFigee(gels?.[c.cle], refId)).map(c => c.cle);
