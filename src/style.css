@@ -1,16 +1,17 @@
 :root {
-  --fond: #f5f6f8; --carte: #fff; --texte: #1d2433; --doux: #5b6577; --bord: #dde1e8;
-  --accent: #2f5bd3; --accent-texte: #fff; --rouge: #b42318; --vert-fond: #e3f4e8; --info: #1b6b3a;
-  --tb: #c9ecd3; --b: #e4f3c8; --m: #fbe8c2; --f: #f8d0cc;
-  --manuelle: #e9defc; --manuelle-texte: #5b2bb5;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--texte); background: var(--fond);
-}
-@media (prefers-color-scheme: dark) {
-  :root {
+  color-scheme: dark;
     --fond: #14171d; --carte: #1d222b; --texte: #e6e9ef; --doux: #9aa3b2; --bord: #323a47;
     --accent: #7c9dff; --accent-texte: #0e1320; --rouge: #ff8a80; --vert-fond: #18321f; --info: #8fdca8;
     --tb: #1f4a2c; --b: #3a4a1f; --m: #4d3d1a; --f: #522724;
     --manuelle: #35255a; --manuelle-texte: #c9b2ff;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--texte); background: var(--fond);
+}
+@media print {
+  :root { color-scheme: light;
+  --fond: #f5f6f8; --carte: #fff; --texte: #1d2433; --doux: #5b6577; --bord: #dde1e8;
+  --accent: #2f5bd3; --accent-texte: #fff; --rouge: #b42318; --vert-fond: #e3f4e8; --info: #1b6b3a;
+  --tb: #c9ecd3; --b: #e4f3c8; --m: #fbe8c2; --f: #f8d0cc;
+  --manuelle: #e9defc; --manuelle-texte: #5b2bb5;
   }
 }
 * { box-sizing: border-box; }
@@ -188,8 +189,8 @@ button.lien-nom:hover { text-decoration: underline; }
 .publier-eleve .publier button:not(.lien) { font-size: 11px; padding: 1px 6px; }
 .publier-eleve .publier .petit { display: block; font-size: 10px; }
 /* Onglet Consommation (administrateur) */
-:root { --danger-fond: #fde7e5; --attention-fond: #fdf1d8; --barre-ia: #2f5bd3; }
-@media (prefers-color-scheme: dark) { :root { --danger-fond: #4a1f1c; --attention-fond: #4a3a18; --barre-ia: #7c9dff; } }
+:root { --danger-fond: #4a1f1c; --attention-fond: #4a3a18; --barre-ia: #7c9dff; }
+@media print { :root { --danger-fond: #fde7e5; --attention-fond: #fdf1d8; --barre-ia: #2f5bd3; } }
 .conso .barre h2 { margin-right: auto; }
 .conso-ok { background: var(--vert-fond); color: var(--info); padding: 10px 14px; border-radius: 8px; }
 .conso-alertes { list-style: none; padding: 0; margin: 8px 0 16px; display: flex; flex-direction: column; gap: 6px; }
