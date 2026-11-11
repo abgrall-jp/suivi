@@ -238,3 +238,67 @@ export function lireTauxBce(xml: string): { euroParDollar: number; jour: string 
   if (!jour || !Number.isFinite(r) || r < 0.5 || r > 2) return null;
   return { euroParDollar: Math.round((1 / r) * 10000) / 10000, jour: jour[1] };
 }
+
+// --- Les 6 cartes du haut de l'onglet, au choix ---------------------------------------------------
+
+/** Ce qu'une carte peut afficher. `seuil` : réglage de cPanel auquel la valeur est comparée (seulement quand la durée est la même). */
+export const INDICATEURS = [
+  { id: "ia", nom: "Appels à l'IA" },
+  { id: "picIa", nom: "Pic d'appels IA par minute" },
+  { id: "pic", nom: "Demandes en même temps, au plus" },
+  { id: "depense", nom: "Dépense IA estimée" },
+  { id: "r429", nom: "Refus « Trop de demandes »" },
+  { id: "r402", nom: "Crédits IA épuisés" },
+  { id: "ia429", nom: "Refus de Google (quota Gemini)" },
+  { id: "erreursIa", nom: "Appels à l'IA en erreur" },
+  { id: "e5xx", nom: "Erreurs du serveur" },
+  { id: "req", nom: "Demandes reçues" },
+  { id: "reponse", nom: "Temps de réponse de l'IA (moyen)" },
+] as const;
+export type Indicateur = (typeof INDICATEURS)[number]["id"];
+export const estIndicateur = (i: unknown): i is Indicateur => INDICATEURS.some(x => x.id === i);
+
+export type Carte = { i: Indicateur; p: Periode };
+/** Les 6 cartes d'origine. */
+export const CARTES_PAR_DEFAUT: Carte[] = [
+  { i: "ia", p: "1h" }, { i: "picIa", p: "1h" }, { i: "pic", p: "1h" },
+  { i: "depense", p: "24h" }, { i: "r429", p: "1h" }, { i: "r402", p: "1h" },
+];
+
+/** Relit les 6 cartes enregistrées ; tout ce qui est inconnu ou manquant retombe sur la carte d'origine. */
+export function lireCartes(brut: unknown): Carte[] {
+  const l = Array.isArray(brut) ? brut : [];
+  return CARTES_PAR_DEFAUT.map((d, k) => {
+    const c = l[k];
+    return c && estIndicateur(c.i) && estPeriode(c.p) ? { i: c.i, p: c.p } : { ...d };
+  });
+}
+
+export type ValeurCarte = { valeur: number; nombreDe: "nb" | "euro" | "sec"; manque: boolean; depuis?: string; seuil?: number };
+
+/**
+ * Valeur d'une carte : somme (ou maximum pour les pics) des applications qui ont des chiffres pour la durée choisie.
+ * manque : au moins une application n'a pas l'historique nécessaire. seuil : réglage comparable, si la durée s'y prête.
+ */
+export function valeurCarte(c: Carte, lignes: LigneApp[], s: Seuils): ValeurCarte {
+  const vs = lignes.filter(l => l.rapport).map(l => valeurs(l.rapport!, c.p));
+  const ok = vs.filter((v): v is Valeurs => !!v);
+  const manque = vs.length > ok.length;
+  const somme = (f: (v: Valeurs) => number) => ok.reduce((n, v) => n + f(v), 0);
+  const maxi = (f: (v: Valeurs) => number) => Math.max(0, ...ok.map(f).filter(Number.isFinite));
+  const depuis = ok.map(v => v.depuis).filter((d): d is string => !!d).sort().pop();
+  const r = (valeur: number, nombreDe: ValeurCarte["nombreDe"] = "nb", seuil?: number): ValeurCarte => ({ valeur, nombreDe, manque, depuis, seuil });
+  switch (c.i) {
+    case "ia": return r(somme(v => v.ia));
+    case "picIa": return r(maxi(v => v.iaMin), "nb", c.p === "1h" ? s.iaParMinute : undefined);
+    case "pic": return r(maxi(v => v.pic), "nb", c.p === "1h" ? s.simultanees : undefined);
+    case "depense": return r(somme(v => cout(v, s)), "euro", c.p === "24h" ? s.coutJour : undefined);
+    case "r429": return r(somme(v => v.r429));
+    case "r402": return r(somme(v => v.r402));
+    case "ia429": return r(somme(v => v.ia429));
+    case "erreursIa": return r(somme(v => v.iaErr));
+    case "e5xx": return r(somme(v => v.e5xx));
+    case "req": return r(somme(v => v.req));
+    case "reponse": { const n = somme(v => v.ia); return r(n ? somme(v => v.iaMs) / n / 1000 : 0, "sec"); }
+  }
+}
