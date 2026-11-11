@@ -6,15 +6,15 @@ import nodemailer from "nodemailer";
 import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
-import { classeEstUnNom, cleClasse, decider, lireListe, normaliser, type EleveRef } from "./lib/correspondance.ts";
+import { classeEstUnNom, cleClasse, decider, idEleve, lireListe, nomPrenomDepuis, normaliser, type EleveRef } from "./lib/correspondance.ts";
 import { APPLICATIONS, type Application } from "./lib/applications.ts";
 import { estRapport, lireSeuils, synthese, type LigneApp, estPeriodeEns, jourMoins, PERIODES_ENS, regrouperEnseignants, type EnsApp, lireTauxBce } from "./lib/consommation.ts";
 import { correspond, empreinte, genererMotDePasse } from "./lib/parents.ts";
 import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, normaliserCode, signerJeton } from "./lib/famille.ts";
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
-import { noteDeResultat, trimestresCommences } from "./lib/sequenceur.ts";
+import { codesDeLEleve, noteDeResultat, trimestresCommences, type CodeClasse } from "./lib/sequenceur.ts";
 import { plansDe, remarquesParEleve, type PlanPublie, type RemarqueEleve } from "./lib/planclasse.ts";
-import { colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essaiRetenu, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
+import { appliquerGel, colonnesFigees, type GelColonne, colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essaiRetenu, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
 
 // ---------------------------------------------------------------------------
 // Serveur de Suivi, le suivi global des applications Je peux apprendre (hébergement o2switch).
@@ -215,8 +215,8 @@ async function envoyerMail(a: string, sujet: string, texte: string) {
 
 // --- Données lues dans les applications (gardées 20 secondes) ------------------------------
 type Donnees = {
-  classes: { id: string; name: string }[];
-  students: { id: string; name: string; classId: string; className: string; provisionalPassword?: boolean; parentPasswords?: number[] }[];
+  classes: { id: string; name: string; code?: string; codeLibelle?: string }[];
+  students: { id: string; name: string; classId: string; className: string; provisionalPassword?: boolean; parentPasswords?: number[]; code?: string; codeLibelle?: string }[];
   exercises: { id: string; title: string }[];
   results: { id: string; studentId: string; exerciseId: string; exerciseTitle: string; percent: number; score: string; completedAt: number | null }[];
 };
@@ -587,7 +587,7 @@ async function calculerTableauSansMemo(e: Enseignant, frais = false) {
   });
   const presents = new Set(resultat.map(r => r.refId).filter((id): id is string => !!id && gardes.has(id)));
   return {
-    provisoire, refs, presents, essais, plusRecent, resultat,
+    provisoire, refs, presents, essais, plusRecent, resultat, lus,
     applications: lus.map(l => ({
       id: l.app.id, code: l.app.code, nom: l.app.nom, erreur: l.erreur,
       exercices: (l.d?.exercises || []).filter(x => l.d!.results.some(r => r.exerciseId === x.id)).map(x => ({ id: x.id, titre: x.title })),
@@ -693,6 +693,7 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
     .map((c: any) => ({ cle: String(c.cle), app: String(c.app || ""), titre: titreDe.get(c.cle) || String(c.titre || ""), coef: lireCoef(c.coef) }));
   const externes: { id: string; titre: string }[] = Array.isArray(b.externes) ? b.externes : [];
   const notes: Record<string, any> = b.eleves || {};
+  const gels: Record<string, GelColonne> = b.gels || {};
   const f = await fiche(e);
   let studio = new Map<string, TextesStudio>();
   if (f.apps?.appreciations) {
@@ -707,13 +708,14 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
   }
   const eleves = refsClasse.map(r => {
     const n = notes[r.id] || {};
-    const essais = t.essais.get(r.id) || {};
+    const essais = appliquerGel(t.essais.get(r.id) || {}, gels, r.id);
     const calculee = colonnes.length ? noteSur20(essais, colonnes, per[trimestre]) : null;
     return {
       id: r.id, nom: r.nom, prenom: r.prenom, calculee,
       notes: Object.fromEntries(colonnes.map(c => [c.cle, noteColonne(essais[c.cle], per[trimestre])])),
       manuelles: colonnesManuelles(essais, colonnes, per[trimestre]),
       autres: Object.fromEntries(colonnes.flatMap(c => { const a = autreNote(essais[c.cle], per[trimestre]); return a ? [[c.cle, a]] : []; })),
+      figees: colonnesFigees(gels, colonnes, r.id),
       finale: typeof n.finale === "number" ? n.finale : null, figeeLe: n.figeeLe || null,
       externes: n.externes || {}, appreciation: appreciationDe(n, studio.get(r.id)?.prof?.texte), appreciationEcrite: typeof n.appreciation === "string",
       studio: { eleve: studio.get(r.id)?.eleve?.texte || "", prof: studio.get(r.id)?.prof?.texte || "" },
@@ -732,7 +734,7 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
   }
   res.json({
     periodes: per, classes, colonnesDispo, trimestre, classe,
-    colonnes, externes, eleves, studioRelie: !!f.apps?.appreciations,
+    colonnes: colonnes.map(c => ({ ...c, figeeLe: gels[c.cle]?.le || null })), externes, eleves, studioRelie: !!f.apps?.appreciations,
     publieLe: (await db.doc(`publications/${e.uid}__bulletin__${trimestre}__${classe}`).get()).get("publieLe") || null,
     publieesEleves: Object.fromEntries((await db.collection("publications").where("uid", "==", e.uid).get()).docs.map(d => d.data())
       .filter(d => d.type === "bulletin" && d.eleve && d.trimestre === trimestre && d.classe === classe).map(d => [String(d.eleve), String(d.publieLe)])),
@@ -799,11 +801,62 @@ app.post("/api/bulletin/figer", exigerEnseignant(), route(async (req, res) => {
   const le = new Date().toISOString();
   for (const r of elevesDeClasse(t, classe)) {
     if (typeof b.eleves?.[r.id]?.finale === "number") continue;
-    const n = noteSur20(t.essais.get(r.id) || {}, b.colonnes, per[trimestre]);
+    const n = noteSur20(appliquerGel(t.essais.get(r.id) || {}, b.gels, r.id), b.colonnes, per[trimestre]);
     if (n !== null) maj[r.id] = { finale: n, figeeLe: le };
   }
   await ref.set({ eleves: maj, majLe: le }, { merge: true });
   res.json({ ok: true, figees: Object.keys(maj).length });
+}));
+
+// Figer une colonne : la note de chaque élève de la classe ne suit plus les applications.
+// defiger : la colonne suit de nouveau les applications pour toute la classe.
+app.post("/api/bulletin/figer-colonne", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const { trimestre, classe } = lireTrimestreClasse(req.body);
+  const cle = texteCourt(req.body?.cle, 300);
+  const ref = db.doc(`bulletins/${idBulletin(e.uid, trimestre, classe)}`);
+  const b = (await ref.get()).data();
+  if (!b?.colonnes?.some((c: any) => c.cle === cle)) throw httpError(404, "Cette colonne n'est pas dans le bulletin.");
+  if (req.body?.defiger) {
+    await ref.set({ gels: { [cle]: FieldValue.delete() }, majLe: new Date().toISOString() }, { merge: true });
+    return res.json({ ok: true });
+  }
+  const per = await periodes();
+  const t = await calculerTableau(e);
+  const notes: Record<string, number | null> = {};
+  for (const r of elevesDeClasse(t, classe)) notes[r.id] = noteColonne(t.essais.get(r.id)?.[cle], per[trimestre]);
+  const le = new Date().toISOString();
+  await ref.set({ gels: { [cle]: { le, notes, sauf: [] } }, majLe: le }, { merge: true });
+  res.json({ ok: true, figees: Object.values(notes).filter(n => n !== null).length });
+}));
+
+// Dans une colonne figée, un élève : le défiger (sa note suit de nouveau les applications), le refiger
+// (sur sa note du moment), ou changer sa note figée.
+app.post("/api/bulletin/figer-eleve", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const { trimestre, classe } = lireTrimestreClasse(req.body);
+  const cle = texteCourt(req.body?.cle, 300);
+  const refId = texteCourt(req.body?.refId, 200);
+  const ref = db.doc(`bulletins/${idBulletin(e.uid, trimestre, classe)}`);
+  const b = (await ref.get()).data();
+  const gel: GelColonne | undefined = b?.gels?.[cle];
+  if (!gel) throw httpError(404, "Cette colonne n'est pas figée.");
+  const t = await calculerTableau(e);
+  if (!elevesDeClasse(t, classe).some(r => r.id === refId)) throw httpError(404, "Cet élève n'est pas dans cette classe.");
+  const sauf = new Set(gel.sauf || []);
+  const notes = { ...(gel.notes || {}) };
+  if (req.body?.defiger) sauf.add(refId);
+  else {
+    let n: number | null | undefined;
+    if ("note" in (req.body || {})) n = lireNote(req.body.note);
+    else n = noteColonne(t.essais.get(refId)?.[cle], (await periodes())[trimestre]);
+    if (n === undefined) throw httpError(400, "La note doit être entre 0 et 20.");
+    notes[refId] = n; sauf.delete(refId);
+  }
+  // Remplace toute la colonne figée (merge garderait d'anciennes clés de notes).
+  await ref.set({ gels: { [cle]: FieldValue.delete() } }, { merge: true });
+  await ref.set({ gels: { [cle]: { ...gel, notes, sauf: [...sauf] } }, majLe: new Date().toISOString() }, { merge: true });
+  res.json({ ok: true });
 }));
 
 // Note saisie à la main dans une colonne (tableau ou bulletin) : note sur 20, ou vide pour l'effacer.
@@ -901,6 +954,31 @@ app.post("/api/correspondances", exigerEnseignant(), route(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Ajouter à la liste de l'établissement un élève d'une application qui n'y est pas (compte de test, élève arrivé en cours d'année),
+// sans réimporter toute la liste. Il est relié à cet élève, et les autres applications où il porte le même nom le retrouvent seules.
+// Ces ajouts sont marqués « ajoute » : un nouvel import de la liste les garde.
+app.post("/api/eleves/ajouter", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const a = appParId(req.body?.app);
+  const studentId = texteCourt(req.body?.studentId, 200);
+  if (!a || !studentId) throw httpError(400, "Élève incorrect.");
+  const f = await fiche(e);
+  if (!f.apps?.[a.id]?.email) throw httpError(403, "Reliez d'abord cette application.");
+  const d = await donnees(a, f.apps[a.id].email);
+  const s = d.students.find(x => x.id === studentId);
+  if (!s) throw httpError(404, "Cet élève n'est pas dans vos classes.");
+  const c = d.classes.find(x => x.id === s.classId);
+  const classe = String(c?.name || s.className || "").trim().slice(0, 40);
+  const { nom, prenom } = nomPrenomDepuis(String(s.name || ""));
+  if (!classe || !nom) throw httpError(400, "Il faut un nom et une classe pour ajouter cet élève.");
+  const id = idEleve(classe, nom, prenom);
+  const ref = db.doc(`eleves/${id}`);
+  if (!(await ref.get()).exists) await ref.set({ classe, nom: nom.slice(0, 80), prenom: prenom.slice(0, 80), email1: "", email2: "", ajoute: true, par: e.email, le: new Date().toISOString() });
+  cacheRefs = null;
+  await db.doc(`correspondances/${cleCorr(a.id, studentId)}`).set({ refId: id, par: e.email, le: new Date().toISOString() });
+  res.json({ ok: true, id });
+}));
+
 // Corriger le nom et le prénom d'un élève (vides : revenir à ceux des applications).
 // corrections/{refId} : nom, prenom, par, le — valable pour tous les enseignants.
 app.post("/api/eleves/nom", exigerEnseignant(), route(async (req, res) => {
@@ -992,11 +1070,12 @@ app.post("/api/admin/eleves", exigerEnseignant(), route(async (req, res) => {
   const avant = await db.collection("eleves").get();
   const garder = new Set(eleves.map(x => x.id));
   const w = db.bulkWriter();
-  for (const d of avant.docs) if (!garder.has(d.id)) w.delete(d.ref);
+  // Les élèves ajoutés un par un (comptes de test...) restent : ils ne figurent pas dans le tableur de l'établissement.
+  for (const d of avant.docs) if (!garder.has(d.id) && d.get("ajoute") !== true) w.delete(d.ref);
   for (const x of eleves) w.set(db.doc(`eleves/${x.id}`), { classe: x.classe, nom: x.nom, prenom: x.prenom, email1: x.email1, email2: x.email2 });
   await w.close();
   cacheRefs = null;
-  res.json({ ok: true, nombre: eleves.length, retires: avant.docs.filter(d => !garder.has(d.id)).length });
+  res.json({ ok: true, nombre: eleves.length, retires: avant.docs.filter(d => !garder.has(d.id) && d.get("ajoute") !== true).length });
 }));
 
 // --- Parents : un mot de passe par parent, le même dans toutes les applications ---------------
@@ -1196,7 +1275,10 @@ app.post("/api/publier/tableau", exigerEnseignant(), route(async (req, res) => {
     type: "tableau", uid: e.uid, enseignant: await nomEnseignant(e), classe, classeNom: eleves[0].classe, publieLe, ...(seul ? { eleve: seul } : {}),
     colonnes, lignes, refIds: eleves.map(r => r.id), noms: Object.fromEntries(eleves.map(r => [r.id, { nom: r.nom, prenom: r.prenom, classe: r.classe }])),
   });
-  res.json({ ok: true, publieLe, eleves: eleves.length, colonnes: colonnes.length });
+  // Élèves de la classe qui ne reçoivent rien : sans aucun résultat rattaché dans les applications de l'enseignant
+  // (nom à vérifier dans « Noms des élèves », ou pas encore de compte). Dit à l'enseignant pour qu'il ne croie pas qu'ils l'ont.
+  const absents = seul ? [] : t.refs.filter(r => cleClasse(r.classe) === classe && !t.presents.has(r.id)).sort(parNom).map(r => `${r.prenom} ${r.nom}`.trim());
+  res.json({ ok: true, publieLe, eleves: eleves.length, colonnes: colonnes.length, noms: eleves.map(r => `${r.prenom} ${r.nom}`.trim()), absents });
 }));
 
 app.post("/api/publier/bulletin", exigerEnseignant(), route(async (req, res) => {
@@ -1216,7 +1298,7 @@ app.post("/api/publier/bulletin", exigerEnseignant(), route(async (req, res) => 
   const eleves: Record<string, any> = {};
   for (const r of refs) {
     const n = b.eleves?.[r.id] || {};
-    const ess = t.essais.get(r.id) || {};
+    const ess = appliquerGel(t.essais.get(r.id) || {}, b.gels, r.id);
     const calculee = noteSur20(ess, colonnes, per[trimestre]);
     eleves[r.id] = {
       notes: Object.fromEntries(colonnes.map(c => [c.cle, noteColonne(ess[c.cle], per[trimestre])])),
@@ -1316,10 +1398,10 @@ app.post("/api/famille/codes", exigerEnseignant(), route(async (req, res) => {
 
 // Essais de mot de passe : 10 par quart d'heure pour un même élève depuis une même adresse (toute une classe
 // partage souvent la même adresse au collège), et 300 au total par adresse.
-const limiteFamille = makeLimiter(10, 15 * 60 * 1000);
+const limiteFamille = makeLimiter(10, 5 * 60 * 1000); // 10 essais, blocage 5 minutes (annoncé sous le mot de passe)
 const limiteFamilleIp = makeLimiter(300, 15 * 60 * 1000);
 const essaiFamille = (ip: string, qui: unknown) => {
-  if (!limiteFamilleIp(ip) || !limiteFamille(`${ip}|${String(qui ?? "").slice(0, 200).toLowerCase()}`)) throw httpError(429, "Trop d'essais. Réessayez dans un quart d'heure.");
+  if (!limiteFamilleIp(ip) || !limiteFamille(`${ip}|${String(qui ?? "").slice(0, 200).toLowerCase()}`)) throw httpError(429, "Trop d'essais. Réessayez dans 5 minutes.");
 };
 
 // Prénom et initiale du nom (« Alice D. ») ; le nom entier seulement si deux élèves de la classe s'appelleraient pareil.
@@ -1691,15 +1773,26 @@ app.get("/api/sequenceur/eleve", exigerSequenceur(), route(async (req, res) => {
   const per = await periodes();
   const trimestres = trimestresCommences(per);
   const bulletins: any[] = [];
+  const codes: CodeClasse[] = [];
   let eleve: { prenom: string; nom: string; classe: string } | null = null;
+  // Accueil élève de Suivi déjà réglé sur cet élève (enseignant, classe, nom) : il n'a plus qu'à taper son mot de passe.
+  let chemin = "";
   for (const { e } of comptes) {
     const t = await calculerTableau(e);
     const refId = t.resultat.find(r => r.app === "sequenceur" && r.refId && ids.includes(r.studentId))?.refId;
     const ref = refId ? t.refs.find(r => r.id === refId) : undefined;
     if (!ref) continue;
     eleve ||= { prenom: ref.prenom, nom: ref.nom, classe: ref.classe };
+    if (!chemin) {
+      const q = new URLSearchParams({ qui: "eleve", ens: e.uid, classe: cleClasse(ref.classe), classeNom: ref.classe, eleve: ref.id, nom: `${ref.prenom} ${ref.nom.trim().charAt(0).toUpperCase()}.`.trim() });
+      chemin = `/famille?${q.toString()}`;
+    }
+    // Codes d'entrée de l'élève dans les autres applications (code de la classe, mot de passe enseignant), rappelés sous ses notes.
+    for (const c of codesDeLEleve(ref.id, t.resultat, t.lus.map(l => ({ app: l.app, d: l.d })))) {
+      if (!codes.some(x => x.appli === c.appli && x.code === c.code)) codes.push(c);
+    }
     const classe = cleClasse(ref.classe);
-    const essais = t.essais.get(ref.id) || {};
+    const essaisEleve = t.essais.get(ref.id) || {};
     const docs = await db.getAll(...trimestres.flatMap(tr => [
       db.doc(`bulletins/${idBulletin(e.uid, tr, classe)}`), db.doc(`publications/${e.uid}__bulletin__${tr}__${classe}`),
       db.doc(`publications/${e.uid}__bulletin__${tr}__${classe}__eleve__${ref.id}`),
@@ -1710,6 +1803,7 @@ app.get("/api/sequenceur/eleve", exigerSequenceur(), route(async (req, res) => {
       const pub = plusRecentes([docs[3 * i + 1].data(), docs[3 * i + 2].data()].filter(Boolean))[0];
       const colonnes = (b.colonnes as any[]).map(c => ({ cle: String(c.cle), app: String(c.app || ""), titre: String(c.titre || ""), coef: lireCoef(c.coef) }));
       const finale = b.eleves?.[ref.id]?.finale;
+      const essais = appliquerGel(essaisEleve, b.gels, ref.id);
       bulletins.push({
         trimestre: tr, enseignant: String(b.nom || ""), periode: per[tr],
         colonnes: colonnes.map(c => ({ ...c, note: noteColonne(essais[c.cle], per[tr]) })),
@@ -1719,7 +1813,7 @@ app.get("/api/sequenceur/eleve", exigerSequenceur(), route(async (req, res) => {
     });
   }
   if (!eleve) throw Object.assign(httpError(404, "Élève pas encore rattaché dans Suivi."), { code: "ELEVE_INCONNU" });
-  res.json({ eleve, bulletins });
+  res.json({ eleve, bulletins, codes, chemin });
 }));
 
 async function startServer() {

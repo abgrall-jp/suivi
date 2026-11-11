@@ -288,9 +288,19 @@ type Tri = { cle: string; sens: 1 | -1 } | null;
 const couleur = (p: number) => (p >= 75 ? "tres-bien" : p >= 50 ? "bien" : p >= 25 ? "moyen" : "faible");
 const dateCourte = (t: number | null) => (t ? new Date(t).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "");
 
+type RetourPublication = { eleves: number; colonnes: number; noms?: string[]; absents?: string[] };
+/** Ce que la publication a réellement envoyé : combien d'élèves la voient, et ceux de la classe qui ne la voient pas. */
+function textePublication(r: RetourPublication, classe: string) {
+  const s = (n: number) => (n > 1 ? "s" : "");
+  let t = `Publié pour ${r.eleves} élève${s(r.eleves)} de ${classe} (${r.colonnes} colonne${s(r.colonnes)}) : ils le voient tout de suite dans l'accueil élève et parent.`;
+  if (r.absents?.length) t += ` ${r.absents.length} élève${s(r.absents.length)} de la classe ne le ${r.absents.length > 1 ? "voient" : "voit"} pas, faute de résultat rattaché dans vos applications (voir « Noms des élèves ») : ${r.absents.join(", ")}.`;
+  return t;
+}
+
 function VueTableau({ moi, onAVerifier, allerA, actif }: { moi: Moi; onAVerifier: (n: number) => void; allerA: (o: Onglet) => void; actif: boolean }) {
   const [t, setT] = useState<Tableau | null>(null);
   const [msg, setMsg] = useState("");
+  const [info, setInfo] = useState("");
   const [classe, setClasse] = useState("");
   const [cherche, setCherche] = useState("");
   const [tri, setTri] = useState<Tri>(null);
@@ -404,14 +414,15 @@ function VueTableau({ moi, onAVerifier, allerA, actif }: { moi: Moi; onAVerifier
         <input type="search" placeholder="Chercher une colonne (ex. : 4e Séq. 2)" value={cherche} onChange={e => setCherche(e.target.value)} />
         <button onClick={() => charger(true)}>Actualiser</button>
         {classe && <BoutonPublier publieLe={t?.publiees?.[cleCl(classe)] || null}
-          onPublier={async () => { try { await api("/api/publier/tableau", { classe }); await charger(); } catch (e: any) { setMsg(e.message); } }}
-          onRetirer={async () => { try { await api("/api/publier/tableau", { classe, retirer: true }); await charger(); } catch (e: any) { setMsg(e.message); } }} />}
+          onPublier={async () => { try { setInfo(textePublication(await api<RetourPublication>("/api/publier/tableau", { classe }), classe)); await charger(); } catch (e: any) { setMsg(e.message); } }}
+          onRetirer={async () => { try { await api("/api/publier/tableau", { classe, retirer: true }); setInfo(""); await charger(); } catch (e: any) { setMsg(e.message); } }} />}
         {!!t?.applications.length && <button onClick={() => setClassesDe(classesDe ? null : t.applications[0].id)}>Classes par application</button>}
         {masquees.length > 0 && <button onClick={() => setVoirMasquees(!voirMasquees)}>Colonnes masquées ({masquees.length})</button>}
         {!!apps.length && <span className="defilement"><button title="Voir les colonnes de gauche" onClick={() => decaler(-1)}>◀</button><button title="Voir les colonnes de droite" onClick={() => decaler(1)}>▶</button></span>}
         {t && <span className="petit">Mis à jour à {new Date(t.lu).toLocaleTimeString("fr-FR")}</span>}
       </div>
       {msg && <p className="erreur">{msg}</p>}
+      {info && <p className="info">{info} <button className="lien" onClick={() => setInfo("")}>fermer</button></p>}
       {voirMasquees && masquees.length > 0 && (
         <div className="carte etiquettes">
           <span className="petit">Colonnes masquées :</span>
@@ -649,6 +660,10 @@ function VueCorrespondances({ onChange }: { onChange: (n: number) => void }) {
   const choisir = async (app: string, studentId: string, refId: string | null) => {
     try { await api("/api/correspondances", { app, studentId, refId }); charger(); } catch (e: any) { setMsg(e.message); }
   };
+  const ajouterALaListe = async (app: string, studentId: string, nom: string) => {
+    if (!confirm(`Ajouter « ${nom} » à la liste des élèves de l'établissement ? Ses notes des applications où il porte ce nom lui seront rattachées.`)) return;
+    try { await api("/api/eleves/ajouter", { app, studentId }); charger(); } catch (e: any) { setMsg(e.message); }
+  };
   const exclure = async (x: { eleves: string[]; classes: string[]; inclus?: string[] }) => {
     try { await api("/api/exclus", x); charger(); } catch (e: any) { setMsg(e.message); }
   };
@@ -747,6 +762,7 @@ function VueCorrespondances({ onChange }: { onChange: (n: number) => void }) {
                     {e.refId && <strong>{nomRef(e.refId)}</strong>}
                     {e.candidats.map(id => <button key={id} onClick={() => choisir(e.app, e.studentId, id)}>{nomRef(id)}</button>)}
                     <ChoixEleve refs={c.references} placeholder={e.refId ? "Changer : premières lettres…" : "Tapez les premières lettres…"} onChoix={r => choisir(e.app, e.studentId, r.id)} />
+                    {!e.refId && !c.provisoire && <button className="lien" title="Cet élève n'est pas dans la liste de l'établissement (compte de test, nouvel élève) : il y est ajouté avec ce nom et cette classe" onClick={() => ajouterALaListe(e.app, e.studentId, e.nom)}>ajouter à la liste</button>}
                     {e.statut !== "ignore" && <button className="lien" title="Compte de test, élève parti…" onClick={() => choisir(e.app, e.studentId, null)}>ne pas suivre</button>}
                   </div>
                 </td>

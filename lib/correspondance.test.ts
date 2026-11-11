@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classeEstUnNom, cleClasse, comparer, decider, lireListe, type EleveRef } from "./correspondance.ts";
+import { classeEstUnNom, cleClasse, comparer, decider, idEleve, lireListe, nomPrenomDepuis, type EleveRef } from "./correspondance.ts";
 
 const refs: EleveRef[] = [
   { id: "lea", classe: "5A", nom: "MARTIN", prenom: "Léa" },
@@ -64,4 +64,26 @@ test("classe qui n'est que le nom de l'élève", () => {
   assert.equal(classeEstUnNom("5e B", "Alice Durand"), false);
   assert.equal(classeEstUnNom("Élèves", "Alice Durand"), false);
   assert.equal(classeEstUnNom("", "Alice Durand"), false);
+});
+
+test("nomPrenomDepuis : nom en majuscules, sinon dernier mot, en gardant tous les mots", () => {
+  assert.deepEqual(nomPrenomDepuis("MARTIN Léa"), { nom: "MARTIN", prenom: "Léa" });
+  assert.deepEqual(nomPrenomDepuis("LE GOFF Inès"), { nom: "LE GOFF", prenom: "Inès" });
+  assert.deepEqual(nomPrenomDepuis("élève test 201"), { nom: "201", prenom: "élève test" });
+  assert.deepEqual(nomPrenomDepuis("Hugo"), { nom: "Hugo", prenom: "" });
+  // Le même élève écrit dans les autres applications est alors reconnu à coup sûr.
+  const { nom, prenom } = nomPrenomDepuis("élève test 201");
+  const ref = { id: idEleve("201", nom, prenom), classe: "201", nom, prenom };
+  for (const ecrit of ["eleve test 201", "Eleve test 201", "élève test 201"]) assert.equal(comparer(ecrit, "201", ref), "sur");
+  assert.deepEqual(decider("Eleve test 201", "201", [ref]), { statut: "auto", refId: ref.id });
+});
+
+test("comptes de test numérotés : un autre nombre n'est pas une faute de frappe", () => {
+  const t401 = { id: "a", classe: "401", nom: "eleve-test", prenom: "401" };
+  const t202 = { id: "b", classe: "202", nom: "élève", prenom: "test 202" };
+  assert.equal(comparer("élève test 201", "201", t401), null);
+  assert.equal(comparer("eleve test 201", "201", t202), null);
+  assert.deepEqual(decider("élève test 201", "201", [t401, t202]), { statut: "aucun" });
+  // Une vraie faute de frappe reste proposée.
+  assert.equal(comparer("Lea Martinn", "5B", { id: "c", classe: "5B", nom: "MARTIN", prenom: "Léa" }), "probable");
 });

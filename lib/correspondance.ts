@@ -15,6 +15,7 @@ export const normaliser = (s: string) =>
   String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 const jetons = (s: string) => normaliser(s).split(" ").filter(Boolean);
+const nombres = (mots: string[]) => mots.filter(m => /\d/.test(m));
 
 /** « 5e B », « 5ème B » et « 5B » donnent tous « 5b ». */
 export const cleClasse = (s: string) => normaliser(s).replace(/\s+/g, "").replace(/^(\d+)(ieme|eme|em|e)?/, "$1");
@@ -39,7 +40,8 @@ export function comparer(nomApp: string, classeApp: string, ref: EleveRef): Nive
   const trie = (x: string[]) => [...x].sort().join(" ");
   let niveau: Niveau | null = null;
   if (trie(a) === trie(r)) niveau = "sur";
-  else if (Math.min(trie(a).length, trie(r).length) >= 6 && distance(trie(a), trie(r)) <= 1) niveau = "probable";
+  // Une faute de frappe, mais pas un autre nombre : « eleve test 201 » n'est pas « eleve test 401 ».
+  else if (Math.min(trie(a).length, trie(r).length) >= 6 && distance(trie(a), trie(r)) <= 1 && trie(nombres(a)) === trie(nombres(r))) niveau = "probable";
   else if (p.every(x => a.includes(x))) {
     const reste = a.filter(x => !p.includes(x));
     // « Léa M. » (initiale du nom) ou « Léa » seule.
@@ -72,6 +74,20 @@ export function decider(nomApp: string, classeApp: string, refs: EleveRef[]): De
 /** Identifiant stable d'un élève de référence, tiré de sa classe et de son nom. */
 export const idEleve = (classe: string, nom: string, prenom: string) =>
   `${cleClasse(classe)}_${normaliser(nom).replace(/ /g, "-")}_${normaliser(prenom).replace(/ /g, "-")}`.slice(0, 150);
+
+/**
+ * Nom et prénom tirés d'un nom écrit dans une application (« MARTIN Léa », « Léa Martin », « élève test 201 »).
+ * Les mots en majuscules forment le nom ; sinon, le dernier mot. Tous les mots sont gardés, pour que
+ * le rapprochement retrouve exactement le même élève dans les autres applications.
+ */
+export function nomPrenomDepuis(nomApp: string): { nom: string; prenom: string } {
+  const mots = String(nomApp || "").trim().split(/\s+/).filter(Boolean);
+  if (mots.length <= 1) return { nom: mots[0] || "", prenom: "" };
+  const majuscule = (m: string) => /\p{L}/u.test(m) && m === m.toUpperCase() && m !== m.toLowerCase();
+  const nom = mots.filter(majuscule);
+  if (nom.length && nom.length < mots.length) return { nom: nom.join(" "), prenom: mots.filter(m => !majuscule(m)).join(" ") };
+  return { nom: mots[mots.length - 1], prenom: mots.slice(0, -1).join(" ") };
+}
 
 /**
  * Liste d'élèves collée depuis un tableur ou un fichier CSV : Classe ; Nom ; Prénom ; e-mail parent 1 ; e-mail parent 2
