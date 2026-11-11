@@ -6,7 +6,7 @@ import { EnteteColonne } from "./outils.tsx";
 // L'élève ou ses parents se connectent avec le code personnel, ou avec le mot de passe parent ;
 // ils voient seulement ce que les enseignants ont publié pour cet élève.
 
-type Enfant = { jeton: string; prenom: string; nom: string };
+type Enfant = { jeton: string; prenom: string; nom: string; lectureSeule?: boolean };
 type Colonne = { cle: string; app?: string; titre: string; coef?: number };
 type VueFamille = {
   eleve: { nom: string; prenom: string; classe: string } | null;
@@ -42,8 +42,8 @@ export function EspaceFamille() {
           <nav>{enfants.map((e, i) => <button key={e.jeton} className={i === choisi ? "actif" : ""} onClick={() => setChoisi(i)}>{e.prenom || `Enfant ${i + 1}`}</button>)}</nav>
         )}
         <span className="moi">
-          <button className="lien" onClick={() => setChanger({ jeton: enfant.jeton, prenom: enfant.prenom, premiere: false })}>Changer le mot de passe</button>
-          {" · "}<button className="lien" onClick={sortir}>Se déconnecter</button>
+          {!enfant.lectureSeule && <><button className="lien" onClick={() => setChanger({ jeton: enfant.jeton, prenom: enfant.prenom, premiere: false })}>Changer le mot de passe</button>{" · "}</>}
+          <button className="lien" onClick={sortir}>Se déconnecter</button>
         </span>
       </header>
       <main><VueEnfant key={enfant.jeton} jeton={enfant.jeton} onExpire={sortir} /></main>
@@ -81,7 +81,7 @@ function ConnexionFamille({ onOk, onChanger }: { onOk: (e: Enfant[]) => void; on
     setMsg(""); setOccupe(true);
     try {
       const d = await poster("/api/famille/connexion", mode === "liste" ? { refId, enseignant: ens, motDePasse: mdp } : mode === "identifiant" ? { identifiant, motDePasse: mdp } : { email: email.trim(), motDePasse: mdp });
-      if (d.doitChanger) onChanger(d.jeton, d.prenom); else onOk(d.enfants);
+      if (d.doitChanger && qui === "parent") setMsg("Votre enfant doit d'abord choisir son mot de passe personnel (espace élève)."); else if (d.doitChanger) onChanger(d.jeton, d.prenom); else onOk(qui === "parent" ? d.enfants.map((e: Enfant) => ({ ...e, lectureSeule: true })) : d.enfants);
     } catch (e: any) { setMsg(e.message); } finally { setOccupe(false); }
   };
   const tu = qui === "eleve";
