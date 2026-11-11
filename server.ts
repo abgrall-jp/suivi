@@ -1356,9 +1356,10 @@ app.get("/api/famille/annuaire/eleves", route(async (req, res) => {
   res.json({ eleves: nomsAffiches(Object.entries<any>(d.eleves || {}).map(([id, x]) => ({ id, prenom: String(x?.prenom || ""), nom: String(x?.nom || "") }))) });
 }));
 
-const enfantPour = async (refId: string, sec: string) => {
+// Parent connecté avec son adresse e-mail : jeton « parent: » = consultation seule (il ne change pas le mot de passe de l'enfant).
+const enfantPour = async (refId: string, sec: string, parent = false) => {
   const r = (await elevesReference()).find(x => x.id === refId) || (await db.doc(`codesEleves/${refId}`).get()).data();
-  return { jeton: signerJeton(refId, sec), prenom: String(r?.prenom || ""), nom: String(r?.nom || "") };
+  return { jeton: signerJeton(parent ? `parent:${refId}` : refId, sec), prenom: String(r?.prenom || ""), nom: String(r?.nom || ""), ...(parent ? { lectureSeule: true } : {}) };
 };
 const MDP_MIN = 8;
 
@@ -1418,7 +1419,7 @@ app.post("/api/famille/connexion", route(async (req, res) => {
     refIds = Array.from(new Set(snap.docs.filter(d => correspond(mdp, String(d.get("empreinte")))).map(d => String(d.get("refId")))));
   }
   if (!refIds.length) throw httpError(401, "Adresse ou mot de passe incorrect.");
-  res.json({ enfants: await Promise.all(refIds.map(id => enfantPour(id, sec))) });
+  res.json({ enfants: await Promise.all(refIds.map(id => enfantPour(id, sec, true))) });
 }));
 
 // Mot de passe choisi par l'élève : à la première connexion (jeton « changer: »), ou plus tard depuis son espace.
@@ -1428,6 +1429,7 @@ app.post("/api/famille/mot-de-passe", route(async (req, res) => {
   const lu = lireJeton(String(req.body?.jeton || ""), sec);
   const refId = lu?.startsWith("changer:") ? lu.slice(8) : lu;
   if (!refId) throw httpError(401, "Reconnectez-vous avec votre code.");
+  if (refId.startsWith("parent:")) throw httpError(403, "Espace parents en lecture seule : le mot de passe se change dans l'espace élève.");
   const nouveau = String(req.body?.nouveau || "").trim();
   if (nouveau.length < MDP_MIN || nouveau.length > 100) throw httpError(400, `Le mot de passe doit avoir au moins ${MDP_MIN} caractères.`);
   const ref = db.doc(`codesEleves/${refId}`);
@@ -1439,7 +1441,7 @@ app.post("/api/famille/mot-de-passe", route(async (req, res) => {
 app.get("/api/famille", route(async (req, res) => {
   const h = String(req.headers.authorization || "");
   const lu = h.startsWith("Famille ") ? lireJeton(h.slice(8).trim(), await secret()) : null;
-  const refId = lu && !lu.startsWith("changer:") ? lu : null;
+  const refId = lu && !lu.startsWith("changer:") ? lu.replace(/^parent:/, "") : null;
   if (!refId) throw httpError(401, "Connectez-vous avec votre identifiant.");
   const snap = await db.collection("publications").where("refIds", "array-contains", refId).get();
   const docs = plusRecentes(snap.docs.map(d => d.data()));
