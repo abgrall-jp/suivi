@@ -386,15 +386,49 @@ app.post("/api/apps/code", exigerEnseignant(), route(async (req, res) => {
 // Créer une classe et ses élèves dans plusieurs applications à la fois.
 // Par défaut : simulation (« à blanc »), rien n'est écrit. Création seulement, jamais de modification.
 // Chaque application répond seule : une erreur dans l'une n'arrête pas les autres.
+// Niveaux (du plus jeune au plus âgé) ; les disciplines viennent du Séquenceur (repli : liste par défaut).
+const NIVEAUX = ["PS", "MS", "GS", "CP", "CE1", "CE2", "CM1", "CM2", "6e", "5e", "4e", "3e", "2de", "1re", "Tle"];
+const DISCIPLINES_DEFAUT = [
+  { nom: "Premier degré", niveaux: NIVEAUX.slice(0, 8) },
+  { nom: "Technologie", niveaux: NIVEAUX.slice(8, 12) },
+  { nom: "SNT", niveaux: ["2de"] },
+];
+const cacheDisciplines = new Map<string, { at: number; disciplines: { nom: string; niveaux: string[] }[]; source: string }>();
+async function disciplinesDe(email: string) {
+  const c = cacheDisciplines.get(email);
+  if (c && Date.now() - c.at < 5 * 60 * 1000) return c;
+  let r = { disciplines: DISCIPLINES_DEFAUT, source: "defaut" };
+  try {
+    const a = appParId("sequenceur");
+    const d = a && parPorte(a) ? await porte(a, `/api/suivi/disciplines?email=${encodeURIComponent(email)}`) : null;
+    const l = (Array.isArray(d?.disciplines) ? d.disciplines : [])
+      .map((x: any) => ({ nom: String(x?.nom || "").trim().slice(0, 80), niveaux: (Array.isArray(x?.niveaux) ? x.niveaux : []).filter((n: string) => NIVEAUX.includes(n)) }))
+      .filter((x: any) => x.nom);
+    if (l.length) r = { disciplines: l, source: "sequenceur" };
+  } catch {}
+  const v = { at: Date.now(), ...r };
+  cacheDisciplines.set(email, v);
+  return v;
+}
+app.get("/api/creer-comptes/referentiel", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const f = await fiche(e);
+  const email = f.apps?.sequenceur?.email || e.email;
+  const d = await disciplinesDe(String(email || "").toLowerCase());
+  res.json({ niveaux: NIVEAUX, disciplines: d.disciplines, source: d.source });
+}));
 app.post("/api/creer-comptes", exigerEnseignant(), route(async (req, res) => {
   const e = ensDe(req);
   const nom = String(req.body?.nom || "").trim().slice(0, 120);
+  const niveau = NIVEAUX.includes(req.body?.niveau) ? req.body.niveau : "";
+  const discipline = String(req.body?.discipline || "").trim().slice(0, 80);
   const simulation = req.body?.simulation !== false;
   const ids: string[] = Array.isArray(req.body?.applications) ? req.body.applications : [];
   const eleves = (Array.isArray(req.body?.eleves) ? req.body.eleves : []).slice(0, 80)
     .map((x: any) => ({ prenom: String(x?.prenom || "").trim().slice(0, 60), nom: String(x?.nom || "").trim().slice(0, 60) }))
     .filter((x: any) => x.prenom);
   if (!nom) throw httpError(400, "Nom de classe obligatoire.");
+  if (!niveau) throw httpError(400, "Niveau obligatoire.");
   if (!eleves.length) throw httpError(400, "Aucun élève à créer.");
   const f = await fiche(e);
   const resultats = await Promise.all(Array.from(new Set(ids)).map(async (id) => {
@@ -403,10 +437,11 @@ app.post("/api/creer-comptes", exigerEnseignant(), route(async (req, res) => {
     const email = f.apps?.[a.id]?.email;
     if (!email) return { app: a.id, nom: a.nom, statut: "non_reliee", erreur: `${a.nom} n'est pas reliée à votre compte Suivi.` };
     try {
-      const r = await porte(a, "/api/suivi/creer-classe", { email, nom, cycle: req.body?.cycle, eleves, simulation });
+      const r = await porte(a, "/api/suivi/creer-classe", { email, nom, niveau, discipline, eleves, simulation });
       return { app: a.id, nom: a.nom, statut: "ok", ...r };
     } catch (err: any) {
-      return { app: a.id, nom: a.nom, statut: "erreur", erreur: String(err?.message || err) };
+      const m = String(err?.message || err);
+      return { app: a.id, nom: a.nom, statut: "erreur", erreur: /404|inconnue/i.test(m) ? `La création de comptes n'est pas encore installée dans ${a.nom}.` : m };
     }
   }));
   res.json({ simulation, resultats });

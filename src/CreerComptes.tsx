@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type Moi } from "./api.ts";
 
 type LigneEleve = { prenom: string; nom: string; statut: string; id?: string; codeProvisoire?: string };
@@ -25,17 +25,22 @@ function lireListe(texte: string) {
 export function VueCreerComptes({ moi }: { moi: Moi }) {
   const prises = moi.catalogue.filter(a => a.eleves && a.prete && moi.apps[a.id]?.email);
   const [nom, setNom] = useState("");
+  const [niveau, setNiveau] = useState("");
+  const [discipline, setDiscipline] = useState("");
+  const [ref, setRef] = useState<{ niveaux: string[]; disciplines: { nom: string; niveaux: string[] }[] } | null>(null);
+  useEffect(() => { api<any>("/api/creer-comptes/referentiel", undefined, true).then(setRef).catch(() => setRef(null)); }, []);
+  const disciplinesDuNiveau = (ref?.disciplines || []).filter(d => !d.niveaux.length || d.niveaux.includes(niveau));
   const [liste, setListe] = useState("");
   const [choix, setChoix] = useState<string[]>([]);
   const [rep, setRep] = useState<Reponse | null>(null);
   const [erreur, setErreur] = useState("");
   const [occupe, setOccupe] = useState(false);
   const eleves = lireListe(liste);
-  const pret = !!nom.trim() && eleves.length > 0 && choix.length > 0;
+  const pret = !!nom.trim() && !!niveau && eleves.length > 0 && choix.length > 0;
 
   const lancer = async (simulation: boolean) => {
     setErreur(""); setOccupe(true);
-    try { setRep(await api<Reponse>("/api/creer-comptes", { nom: nom.trim(), eleves, applications: choix, simulation })); }
+    try { setRep(await api<Reponse>("/api/creer-comptes", { nom: nom.trim(), niveau, discipline, eleves, applications: choix, simulation })); }
     catch (e: any) { setErreur(e.message); }
     finally { setOccupe(false); }
   };
@@ -45,6 +50,18 @@ export function VueCreerComptes({ moi }: { moi: Moi }) {
       <h2>Créer des comptes dans plusieurs applications</h2>
       <p className="petit">Saisissez la classe une seule fois. Rien n'est jamais modifié ni supprimé : un élève déjà présent dans une application est simplement relié, avec son code et ses résultats inchangés.</p>
       <label>Nom de la classe <input value={nom} onChange={e => { setNom(e.target.value); setRep(null); }} placeholder="ex. 6A" /></label>
+      <label>Niveau
+        <select value={niveau} onChange={e => { setNiveau(e.target.value); setDiscipline(""); setRep(null); }}>
+          <option value="">Choisir…</option>
+          {(ref?.niveaux || []).map(n => <option key={n} value={n}>{n}</option>)}
+        </select>
+      </label>{" "}
+      <label>Discipline (facultatif)
+        <select value={discipline} disabled={!niveau} onChange={e => { setDiscipline(e.target.value); setRep(null); }}>
+          <option value="">{niveau ? "Aucune" : "Choisissez d'abord le niveau"}</option>
+          {disciplinesDuNiveau.map(d => <option key={d.nom} value={d.nom}>{d.nom}</option>)}
+        </select>
+      </label>
       <label>Élèves (un par ligne : « Prénom Nom », ou « Nom;Prénom »)
         <textarea rows={8} value={liste} onChange={e => { setListe(e.target.value); setRep(null); }} />
       </label>
