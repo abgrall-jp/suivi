@@ -7,8 +7,9 @@ import { ParentsOubli, VueParents } from "./Parents.tsx";
 import { EnteteColonne, sansAccent } from "./outils.tsx";
 import { BoutonPublier, EspaceFamille, VueCodesFamille } from "./Famille.tsx";
 import { VueConsommation } from "./Consommation.tsx";
+import { VueCreerComptes } from "./CreerComptes.tsx";
 
-type Onglet = "tableau" | "bulletin" | "familles" | "pp" | "parents" | "applications" | "correspondances" | "eleves" | "consommation";
+type Onglet = "tableau" | "bulletin" | "familles" | "pp" | "parents" | "applications" | "correspondances" | "eleves" | "consommation" | "creer";
 
 const messageAuth = (e: any) => {
   const code = String(e?.code || "");
@@ -72,6 +73,7 @@ function Enseignants() {
           <button className={onglet === "correspondances" ? "actif" : ""} onClick={() => setOnglet("correspondances")}>
             Noms des élèves{aVerifier > 0 && <span className="pastille">{aVerifier}</span>}
           </button>
+          <button className={onglet === "creer" ? "actif" : ""} onClick={() => setOnglet("creer")}>Créer des comptes</button>
           {moi.isAdmin && <button className={onglet === "eleves" ? "actif" : ""} onClick={() => setOnglet("eleves")}>Établissement</button>}
           {moi.isAdmin && <button className={onglet === "consommation" ? "actif" : ""} onClick={() => setOnglet("consommation")}>Consommation</button>}
         </nav>
@@ -85,6 +87,7 @@ function Enseignants() {
         {onglet === "parents" && pp && <VueParents classes={pp.gerees} />}
         {onglet === "applications" && <MesApplications moi={moi} onChange={chargerMoi} />}
         {onglet === "correspondances" && <VueCorrespondances onChange={setAVerifier} />}
+        {onglet === "creer" && <VueCreerComptes moi={moi} />}
         {onglet === "eleves" && moi.isAdmin && <ListeEtablissement />}
         {onglet === "consommation" && moi.isAdmin && <VueConsommation />}
       </main>

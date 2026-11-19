@@ -216,3 +216,8 @@ button.lien-nom:hover { text-decoration: underline; }
 .conso-table sup { font-size: 0.7em; margin-left: 1px; }
 .conso-ens { margin-top: 24px; } .conso-ens .barre input[type="search"] { max-width: 220px; }
 .conso-table td small { font-weight: normal; opacity: 0.75; }
+.conso-carte { display: flex; flex-direction: column; gap: 4px; }
+.conso-carte .conso-tuile { flex: 1; }
+.conso-carte-reglage { display: flex; flex-direction: column; gap: 4px; }
+.conso-carte-reglage select { font-size: 0.85em; padding: 2px; max-width: 100%; }
+.conso-reglage-barre { gap: 8px; margin-top: 12px; }

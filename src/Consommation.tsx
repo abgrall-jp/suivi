@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.ts";
-import { cout, estPeriode, estPeriodeEns, PERIODES, PERIODES_ENS, valeurs, type Alerte, type LigneApp, type LigneEns, type Periode, type PeriodeEns, type Seuils, type Valeurs } from "../lib/consommation.ts";
+import { cout, estPeriode, CARTES_PAR_DEFAUT, INDICATEURS, lireCartes, valeurCarte, type Carte, type Indicateur, estPeriodeEns, PERIODES, PERIODES_ENS, valeurs, type Alerte, type LigneApp, type LigneEns, type Periode, type PeriodeEns, type Seuils, type Valeurs } from "../lib/consommation.ts";
 
 // Onglet « Consommation » (administrateur) : appels à l'IA, refus et erreurs de chaque application, relus chaque minute.
 
@@ -54,7 +54,7 @@ export function VueConsommation() {
   }, [charger]);
 
   if (!d) return <section><h2>Consommation des applications</h2><p className={msg ? "erreur" : ""}>{msg || "Lecture des applications…"}</p></section>;
-  const s = d.seuils, t = d.total;
+  const s = d.seuils;
   const absentes = d.applications.filter(a => a.etat === "absent");
   return (
     <section className="conso">
@@ -77,14 +77,7 @@ export function VueConsommation() {
           ))}
         </ul>}
 
-      <div className="conso-tuiles">
-        <Tuile titre="Appels à l'IA, dernière heure" valeur={nb(t.ia1h)} detail={`${nb(t.ia24h)} sur 24 h`} />
-        <Tuile titre="Pic par minute (toutes applis)" valeur={nb(t.picIaMinute)} detail={`seuil ${nb(s.iaParMinute)}`} niveau={niveau(t.picIaMinute, s.iaParMinute)} />
-        <Tuile titre="Demandes en même temps, au plus" valeur={nb(t.picSimultanees)} detail={`limite o2switch ${s.simultanees}`} niveau={niveau(t.picSimultanees, s.simultanees)} />
-        <Tuile titre="Dépense IA estimée, 24 h" valeur={euros(t.cout24h)} detail={`seuil ${s.coutJour} € · ${euros(t.cout1h)} dans l'heure`} niveau={niveau(t.cout24h, s.coutJour)} />
-        <Tuile titre="Refus « Trop de demandes », 1 h" valeur={nb(t.r429h)} detail="limites des applications" niveau={t.r429h ? "attention" : undefined} />
-        <Tuile titre="Crédits IA épuisés, 1 h" valeur={nb(t.r402h)} detail={`quota Google atteint : ${nb(t.ia429h)}`} niveau={t.r402h || t.ia429h ? "danger" : undefined} />
-      </div>
+      <Cartes d={d} />
 
       <Graphique minutes={d.minutes} />
 
@@ -287,6 +280,58 @@ function CoutEnseignants() {
         </>
       )}
     </section>
+  );
+}
+
+const CLE_CARTES = "suivi-conso-cartes";
+
+/** Les 6 cartes du haut : chacune se règle (indicateur et durée) avec son menu ⚙, le choix est retenu par le navigateur. */
+function Cartes({ d }: { d: Reponse }) {
+  const [cartes, setCartes] = useState<Carte[]>(() => {
+    try { return lireCartes(JSON.parse(localStorage.getItem(CLE_CARTES) || "null")); } catch { return lireCartes(null); }
+  });
+  const [reglage, setReglage] = useState(false);
+  const enregistrer = (n: Carte[]) => {
+    setCartes(n);
+    try { localStorage.setItem(CLE_CARTES, JSON.stringify(n)); } catch { /* navigation privée */ }
+  };
+  const changer = (k: number, c: Partial<Carte>) => enregistrer(cartes.map((x, j) => (j === k ? { ...x, ...c } : x)));
+  const nomPeriode = (p: Carte["p"]) => PERIODES.find(x => x.id === p)!.nom.toLowerCase();
+  return (
+    <>
+      <div className="barre conso-reglage-barre">
+        <button className="secondaire" onClick={() => setReglage(!reglage)} aria-expanded={reglage}>⚙ {reglage ? "Terminer" : "Régler les cartes"}</button>
+        {reglage && <button className="secondaire" onClick={() => enregistrer(CARTES_PAR_DEFAUT.map(c => ({ ...c })))}>Rétablir les cartes d'origine</button>}
+      </div>
+      <div className="conso-tuiles">
+        {cartes.map((c, k) => {
+          const v = valeurCarte(c, d.applications, d.seuils);
+          const ind = INDICATEURS.find(x => x.id === c.i)!;
+          const texte = v.nombreDe === "euro" ? euros(v.valeur) : v.nombreDe === "sec" ? `${v.valeur.toFixed(1).replace(".", ",")} s` : nb(v.valeur);
+          const detail = [
+            nomPeriode(c.p) === "1 heure" ? "dernière heure" : nomPeriode(c.p) === "24 heures" ? "dernières 24 h" : `${nomPeriode(c.p)}`,
+            v.seuil ? `seuil ${nb(v.seuil)}${v.nombreDe === "euro" ? " €" : ""}` : "",
+            v.depuis ? `depuis le ${jourFr(v.depuis)}` : "",
+            v.manque ? "applications sans historique non comptées" : "",
+          ].filter(Boolean).join(" · ");
+          return (
+            <div key={k} className="conso-carte">
+              {reglage && (
+                <div className="conso-carte-reglage">
+                  <select value={c.i} onChange={e => changer(k, { i: e.target.value as Indicateur })} aria-label={`Carte ${k + 1} : ce qu'elle affiche`}>
+                    {INDICATEURS.map(x => <option key={x.id} value={x.id}>{x.nom}</option>)}
+                  </select>
+                  <select value={c.p} onChange={e => changer(k, { p: e.target.value as Carte["p"] })} aria-label={`Carte ${k + 1} : la durée`}>
+                    {PERIODES.map(p => <option key={p.id} value={p.id}>{p.nom}</option>)}
+                  </select>
+                </div>
+              )}
+              <Tuile titre={ind.nom} valeur={texte} detail={detail} niveau={v.seuil ? niveau(v.valeur, v.seuil) : v.valeur && (c.i === "r429") ? "attention" : v.valeur && (c.i === "r402" || c.i === "ia429") ? "danger" : undefined} />
+            </div>
+          );
+        })}
+      </div>
+    </>
   );
 }
 
