@@ -383,6 +383,35 @@ app.post("/api/apps/code", exigerEnseignant(), route(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Créer une classe et ses élèves dans plusieurs applications à la fois.
+// Par défaut : simulation (« à blanc »), rien n'est écrit. Création seulement, jamais de modification.
+// Chaque application répond seule : une erreur dans l'une n'arrête pas les autres.
+app.post("/api/creer-comptes", exigerEnseignant(), route(async (req, res) => {
+  const e = ensDe(req);
+  const nom = String(req.body?.nom || "").trim().slice(0, 120);
+  const simulation = req.body?.simulation !== false;
+  const ids: string[] = Array.isArray(req.body?.applications) ? req.body.applications : [];
+  const eleves = (Array.isArray(req.body?.eleves) ? req.body.eleves : []).slice(0, 80)
+    .map((x: any) => ({ prenom: String(x?.prenom || "").trim().slice(0, 60), nom: String(x?.nom || "").trim().slice(0, 60) }))
+    .filter((x: any) => x.prenom);
+  if (!nom) throw httpError(400, "Nom de classe obligatoire.");
+  if (!eleves.length) throw httpError(400, "Aucun élève à créer.");
+  const f = await fiche(e);
+  const resultats = await Promise.all(Array.from(new Set(ids)).map(async (id) => {
+    const a = appParId(id);
+    if (!a || !a.eleves || !parPorte(a)) return { app: id, statut: "inconnue", erreur: "Application non prise en charge." };
+    const email = f.apps?.[a.id]?.email;
+    if (!email) return { app: a.id, nom: a.nom, statut: "non_reliee", erreur: `${a.nom} n'est pas reliée à votre compte Suivi.` };
+    try {
+      const r = await porte(a, "/api/suivi/creer-classe", { email, nom, cycle: req.body?.cycle, eleves, simulation });
+      return { app: a.id, nom: a.nom, statut: "ok", ...r };
+    } catch (err: any) {
+      return { app: a.id, nom: a.nom, statut: "erreur", erreur: String(err?.message || err) };
+    }
+  }));
+  res.json({ simulation, resultats });
+}));
+
 // Relier une application : l'adresse de connexion (déjà vérifiée par Google ou par e-mail), ou une autre adresse confirmée par code.
 app.post("/api/apps/relier", exigerEnseignant(), route(async (req, res) => {
   const e = ensDe(req);
