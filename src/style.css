@@ -56,7 +56,7 @@ main { padding: 20px 16px; max-width: 1400px; margin: 0 auto; }
 table { border-collapse: collapse; }
 .tableau th, .tableau td { border-bottom: 1px solid var(--bord); border-right: 1px solid var(--bord); padding: 6px 8px; font-size: 13px; text-align: center; white-space: nowrap; }
 .tableau thead th { position: sticky; top: 0; background: var(--carte); z-index: 1; }
-.tableau thead tr:nth-child(2) th { top: 31px; }
+.tableau thead tr:nth-child(2) th { top: var(--haut1, 31px); }
 .tableau th.exo { max-width: 120px; overflow: hidden; text-overflow: ellipsis; font-weight: 500; color: var(--doux); }
 .tableau .fixe { position: sticky; left: 0; background: var(--carte); text-align: left; z-index: 2; }
 .tableau thead .fixe { z-index: 3; }

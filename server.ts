@@ -656,6 +656,11 @@ async function calculerTableauSansMemo(e: Enseignant, frais = false) {
       id: l.app.id, code: l.app.code, nom: l.app.nom, erreur: l.erreur,
       exercices: (l.d?.exercises || []).filter(x => l.d!.results.some(r => r.exerciseId === x.id)).map(x => ({ id: x.id, titre: x.title })),
     })),
+    // Tous les exercices donnés, même sans résultat : le tableau peut les montrer (exercices non commencés).
+    applicationsToutes: lus.map(l => ({
+      id: l.app.id, code: l.app.code, nom: l.app.nom, erreur: l.erreur,
+      exercices: (l.d?.exercises || []).map(x => ({ id: x.id, titre: x.title })),
+    })),
     aVerifier: resultat.filter(r => (r.statut === "a_verifier" || r.statut === "aucun") && !exclu({ id: "", nom: r.nom, prenom: "", classe: r.classe })).length,
     masquees: Array.isArray(fe.colonnesMasquees) ? fe.colonnesMasquees.map(String) as string[] : [],
     classesApps,
@@ -687,6 +692,7 @@ app.get("/api/tableau", exigerEnseignant(), route(async (req, res) => {
   res.json({
     provisoire: t.provisoire,
     applications: t.applications,
+    applicationsToutes: t.applicationsToutes,
     eleves: t.refs.filter(r => t.presents.has(r.id)).sort(parNom).map(r => ({
       id: r.id, classe: r.classe, nom: r.nom, prenom: r.prenom,
       resultats: Object.fromEntries(Object.entries(t.essais.get(r.id) || {}).map(([k, v]) => [k, t.plusRecent(v)])),
