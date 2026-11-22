@@ -222,3 +222,7 @@ button.lien-nom:hover { text-decoration: underline; }
 .conso-carte-reglage { display: flex; flex-direction: column; gap: 4px; }
 .conso-carte-reglage select { font-size: 0.85em; padding: 2px; max-width: 100%; }
 .conso-reglage-barre { gap: 8px; margin-top: 12px; }
+
+.tableau td .parts { display: block; font-size: 0.72em; font-weight: normal; opacity: 0.85; line-height: 1.2; }
+.tableau td .parts span { display: block; white-space: nowrap; }
+.tableau td .parts .prov { font-style: italic; }

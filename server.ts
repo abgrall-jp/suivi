@@ -14,6 +14,7 @@ import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, normalis
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
 import { noteDeResultat, trimestresCommences } from "./lib/sequenceur.ts";
 import { plansDe, remarquesParEleve, type PlanPublie, type RemarqueEleve } from "./lib/planclasse.ts";
+import { fusionnerEvalIA } from "./lib/evaliaMoyenne.ts";
 import { colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essaiRetenu, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
 
 // ---------------------------------------------------------------------------
@@ -650,17 +651,21 @@ async function calculerTableauSansMemo(e: Enseignant, frais = false) {
     colonnes: new Set(ok.flatMap(({ app: a, d }) => d.exercises.map(x => `${a.id}:${x.id}`))),
   });
   const presents = new Set(resultat.map(r => r.refId).filter((id): id is string => !!id && gardes.has(id)));
+  const lesApplications = lus.map(l => ({
+    id: l.app.id, code: l.app.code, nom: l.app.nom, erreur: l.erreur,
+    exercices: (l.d?.exercises || []).filter(x => l.d!.results.some(r => r.exerciseId === x.id)).map(x => ({ id: x.id, titre: x.title })),
+  }));
+  // Tous les exercices donnés, même sans résultat : le tableau peut les montrer (exercices non commencés).
+  const toutesLesApplications = lus.map(l => ({
+    id: l.app.id, code: l.app.code, nom: l.app.nom, erreur: l.erreur,
+    exercices: (l.d?.exercises || []).map(x => ({ id: x.id, titre: x.title })),
+  }));
+  // Eval IA : quiz (coef 1) + chatbot (coef 2) d'un même thème = une seule colonne « moyenne ».
+  const fusion = fusionnerEvalIA(lesApplications, toutesLesApplications, essais);
   return {
     provisoire, refs, presents, essais, plusRecent, resultat,
-    applications: lus.map(l => ({
-      id: l.app.id, code: l.app.code, nom: l.app.nom, erreur: l.erreur,
-      exercices: (l.d?.exercises || []).filter(x => l.d!.results.some(r => r.exerciseId === x.id)).map(x => ({ id: x.id, titre: x.title })),
-    })),
-    // Tous les exercices donnés, même sans résultat : le tableau peut les montrer (exercices non commencés).
-    applicationsToutes: lus.map(l => ({
-      id: l.app.id, code: l.app.code, nom: l.app.nom, erreur: l.erreur,
-      exercices: (l.d?.exercises || []).map(x => ({ id: x.id, titre: x.title })),
-    })),
+    applications: fusion.applications,
+    applicationsToutes: fusion.applicationsToutes,
     aVerifier: resultat.filter(r => (r.statut === "a_verifier" || r.statut === "aucun") && !exclu({ id: "", nom: r.nom, prenom: "", classe: r.classe })).length,
     masquees: Array.isArray(fe.colonnesMasquees) ? fe.colonnesMasquees.map(String) as string[] : [],
     classesApps,
