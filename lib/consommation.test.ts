@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { estRapport, jourMoins, lireSeuils, lireTauxBce, regrouperEnseignants, synthese, valeurs, SEUILS_PAR_DEFAUT, type Compteurs, type LigneApp, type RapportApp } from "./consommation.ts";
+import { estRapport, jourMoins, lireSeuils, lireTauxBce, regrouperEnseignants, synthese, valeurs, SEUILS_PAR_DEFAUT, lireCartes, valeurCarte, CARTES_PAR_DEFAUT, type Compteurs, type LigneApp, type RapportApp } from "./consommation.ts";
 
 const zero: Compteurs = { req: 0, pic: 0, r429: 0, r402: 0, e5xx: 0, ia: 0, iaErr: 0, ia429: 0, iaMs: 0, tokIn: 0, tokOut: 0 };
 const T = 1_800_000_000_000;
@@ -121,4 +121,26 @@ test("taux de la BCE : 1 € = 1,0812 $, donc 1 $ = 0,9249 €", () => {
   const xml = `<gesmes:Envelope><Cube><Cube time='2026-11-06'><Cube currency='USD' rate='1.0812'/><Cube currency='JPY' rate='160.5'/></Cube></Cube></gesmes:Envelope>`;
   assert.deepEqual(lireTauxBce(xml), { euroParDollar: 0.9249, jour: "2026-11-06" });
   assert.equal(lireTauxBce("<html>erreur</html>"), null);
+});
+
+test("cartes : réglage enregistré relu, valeurs inconnues remplacées par les cartes d'origine", () => {
+  assert.deepEqual(lireCartes(null), CARTES_PAR_DEFAUT);
+  const c = lireCartes([{ i: "req", p: "24h" }, { i: "nimporte", p: "1h" }, null]);
+  assert.deepEqual(c[0], { i: "req", p: "24h" });
+  assert.deepEqual(c.slice(1), CARTES_PAR_DEFAUT.slice(1));
+  assert.equal(c.length, 6);
+});
+
+test("cartes : somme des applications, seuil seulement à la durée du réglage, applis sans historique signalées", () => {
+  const lignes: LigneApp[] = [
+    { id: "a", nom: "A", etat: "ok", rapport: rapport("a", { ia: 40, req: 300 }) },
+    { id: "b", nom: "B", etat: "ok", rapport: rapport("b", { ia: 10, req: 50 }) },
+  ];
+  assert.equal(valeurCarte({ i: "ia", p: "1h" }, lignes, SEUILS_PAR_DEFAUT).valeur, 50);
+  assert.equal(valeurCarte({ i: "req", p: "24h" }, lignes, SEUILS_PAR_DEFAUT).valeur, 350);
+  assert.equal(valeurCarte({ i: "depense", p: "24h" }, lignes, SEUILS_PAR_DEFAUT).seuil, SEUILS_PAR_DEFAUT.coutJour);
+  assert.equal(valeurCarte({ i: "depense", p: "1h" }, lignes, SEUILS_PAR_DEFAUT).seuil, undefined);
+  const long = valeurCarte({ i: "ia", p: "30j" }, lignes, SEUILS_PAR_DEFAUT); // pas d'historique par jour
+  assert.equal(long.valeur, 0);
+  assert.equal(long.manque, true);
 });

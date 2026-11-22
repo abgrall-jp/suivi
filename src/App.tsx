@@ -7,8 +7,9 @@ import { ParentsOubli, VueParents } from "./Parents.tsx";
 import { EnteteColonne, sansAccent } from "./outils.tsx";
 import { BoutonPublier, EspaceFamille, VueCodesFamille } from "./Famille.tsx";
 import { VueConsommation } from "./Consommation.tsx";
+import { VueCreerComptes } from "./CreerComptes.tsx";
 
-type Onglet = "tableau" | "bulletin" | "familles" | "pp" | "parents" | "applications" | "correspondances" | "eleves" | "consommation";
+type Onglet = "tableau" | "bulletin" | "familles" | "pp" | "parents" | "applications" | "correspondances" | "eleves" | "consommation" | "creer";
 
 const messageAuth = (e: any) => {
   const code = String(e?.code || "");
@@ -72,6 +73,7 @@ function Enseignants() {
           <button className={onglet === "correspondances" ? "actif" : ""} onClick={() => setOnglet("correspondances")}>
             Noms des élèves{aVerifier > 0 && <span className="pastille">{aVerifier}</span>}
           </button>
+          <button className={onglet === "creer" ? "actif" : ""} onClick={() => setOnglet("creer")}>Créer des comptes</button>
           {moi.isAdmin && <button className={onglet === "eleves" ? "actif" : ""} onClick={() => setOnglet("eleves")}>Établissement</button>}
           {moi.isAdmin && <button className={onglet === "consommation" ? "actif" : ""} onClick={() => setOnglet("consommation")}>Consommation</button>}
         </nav>
@@ -85,6 +87,7 @@ function Enseignants() {
         {onglet === "parents" && pp && <VueParents classes={pp.gerees} />}
         {onglet === "applications" && <MesApplications moi={moi} onChange={chargerMoi} />}
         {onglet === "correspondances" && <VueCorrespondances onChange={setAVerifier} />}
+        {onglet === "creer" && <VueCreerComptes moi={moi} />}
         {onglet === "eleves" && moi.isAdmin && <ListeEtablissement />}
         {onglet === "consommation" && moi.isAdmin && <VueConsommation />}
       </main>
@@ -295,6 +298,7 @@ function VueTableau({ moi, onAVerifier, allerA, actif }: { moi: Moi; onAVerifier
   const [cherche, setCherche] = useState("");
   const [tri, setTri] = useState<Tri>(null);
   const [voirMasquees, setVoirMasquees] = useState(false);
+  const [nonCommences, setNonCommences] = useState(false); // montrer aussi les exercices que personne n'a commencés
   const [classesDe, setClassesDe] = useState<string | null>(null); // application dont on choisit les classes
   const defile = useRef<HTMLDivElement>(null);
   // La 2e ligne d'en-tête colle juste sous la 1re, dont la hauteur varie (titre + bouton « Classes ») : on la mesure.
@@ -364,10 +368,21 @@ function VueTableau({ moi, onAVerifier, allerA, actif }: { moi: Moi; onAVerifier
   const mots = sansAccent(cherche).split(/\s+/).filter(Boolean);
   const masquees = t?.masquees || [];
   const titreDe = new Map((t?.applications || []).flatMap(a => a.exercices.map(x => [`${a.id}:${x.id}`, `${a.nom} · ${x.titre}`] as [string, string])));
-  const apps = (t?.applications || []).map(a => ({
+  const sources = nonCommences && t?.applicationsToutes ? t.applicationsToutes : (t?.applications || []);
+  const faitParQuelquUn = (cle: string) => (t?.eleves || []).some(e => e.resultats[cle]);
+  // Exercice non commencé : montré seulement si les classes choisies pour lui (ou pour son application) sont affichées.
+  const classeAdmise = (cle: string, appId: string) => {
+    const permises = t?.classesApps?.[cle]?.length ? t.classesApps[cle] : t?.classesApps?.[appId]?.length ? t.classesApps[appId] : null;
+    if (!permises) return true;
+    return classe ? permises.includes(cleCl(classe)) : classes.some(c => permises.includes(cleCl(c)));
+  };
+  const apps = sources.map(a => ({
     ...a,
-    exercices: a.exercices.filter(x => !masquees.includes(`${a.id}:${x.id}`) && filtres.some(e => e.resultats[`${a.id}:${x.id}`])
-      && mots.every(m => sansAccent(`${a.nom} ${x.titre}`).includes(m))),
+    exercices: a.exercices.filter(x => {
+      const cle = `${a.id}:${x.id}`;
+      return !masquees.includes(cle) && mots.every(m => sansAccent(`${a.nom} ${x.titre}`).includes(m))
+        && (filtres.some(e => e.resultats[cle]) || (nonCommences && !faitParQuelquUn(cle) && classeAdmise(cle, a.id)));
+    }),
   })).filter(a => a.exercices.length);
   const reliees = Object.keys(moi.apps).length;
   const eleves = [...filtres];
@@ -415,6 +430,7 @@ function VueTableau({ moi, onAVerifier, allerA, actif }: { moi: Moi; onAVerifier
         {classe && <BoutonPublier publieLe={t?.publiees?.[cleCl(classe)] || null}
           onPublier={async () => { try { await api("/api/publier/tableau", { classe }); await charger(); } catch (e: any) { setMsg(e.message); } }}
           onRetirer={async () => { try { await api("/api/publier/tableau", { classe, retirer: true }); await charger(); } catch (e: any) { setMsg(e.message); } }} />}
+        {!!t?.applicationsToutes?.length && <label className="petit"><input type="checkbox" checked={nonCommences} onChange={e => setNonCommences(e.target.checked)} /> Afficher les exercices non commencés</label>}
         {!!t?.applications.length && <button onClick={() => setClassesDe(classesDe ? null : t.applications[0].id)}>Classes par application</button>}
         {masquees.length > 0 && <button onClick={() => setVoirMasquees(!voirMasquees)}>Colonnes masquées ({masquees.length})</button>}
         {!!apps.length && <span className="defilement"><button title="Voir les colonnes de gauche" onClick={() => decaler(-1)}>◀</button><button title="Voir les colonnes de droite" onClick={() => decaler(1)}>▶</button></span>}
@@ -429,8 +445,8 @@ function VueTableau({ moi, onAVerifier, allerA, actif }: { moi: Moi; onAVerifier
         </div>
       )}
       {classesDe && t && (() => {
-        const a = t.applications.find(x => x.id === classesDe);
-        return a ? <ChoixClassesApp app={a} applications={t.applications} onApp={setClassesDe} classes={classes} reglage={t.classesApps || {}} onFermer={() => setClassesDe(null)}
+        const a = (t.applicationsToutes || t.applications).find(x => x.id === classesDe);
+        return a ? <ChoixClassesApp app={a} applications={t.applicationsToutes || t.applications} onApp={setClassesDe} classes={classes} reglage={t.classesApps || {}} onFermer={() => setClassesDe(null)}
           onChanger={async (cle, liste) => {
             setT(p => p && { ...p, classesApps: { ...(p.classesApps || {}), [cle]: liste } });
             try { await api("/api/classes-apps", { cle, classes: liste }); await charger(); } catch (e: any) { setMsg(e.message); }
