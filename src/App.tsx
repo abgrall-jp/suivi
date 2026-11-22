@@ -297,6 +297,15 @@ function VueTableau({ moi, onAVerifier, allerA, actif }: { moi: Moi; onAVerifier
   const [voirMasquees, setVoirMasquees] = useState(false);
   const [classesDe, setClassesDe] = useState<string | null>(null); // application dont on choisit les classes
   const defile = useRef<HTMLDivElement>(null);
+  // La 2e ligne d'en-tête colle juste sous la 1re, dont la hauteur varie (titre + bouton « Classes ») : on la mesure.
+  const observeur = useRef<ResizeObserver | null>(null);
+  const mesurerEntete = useCallback((tr: HTMLTableRowElement | null) => {
+    observeur.current?.disconnect();
+    if (!tr) return;
+    const poser = () => tr.closest("table")?.style.setProperty("--haut1", `${tr.getBoundingClientRect().height}px`);
+    poser();
+    if (typeof ResizeObserver !== "undefined") { observeur.current = new ResizeObserver(poser); observeur.current.observe(tr); }
+  }, []);
   const actifRef = useRef(actif);
   // Retour sur l'onglet : relecture discrète (les données affichées restent visibles pendant ce temps).
   useEffect(() => { if (actif && !actifRef.current) charger(false, true); actifRef.current = actif; }, [actif]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -447,7 +456,7 @@ function VueTableau({ moi, onAVerifier, allerA, actif }: { moi: Moi; onAVerifier
         <div className="defile" ref={defile}>
           <table className="tableau">
             <thead>
-              <tr>
+              <tr ref={mesurerEntete}>
                 <th rowSpan={2} className="fixe triable" onClick={() => trier("__nom")} title="Classer par nom">Élève{fleche("__nom")}</th>
                 {apps.map(a => {
                   const limite = t?.classesApps?.[a.id]?.length ? classes.filter(c => t.classesApps![a.id].includes(cleCl(c))).join(", ") || "aucune" : "";
