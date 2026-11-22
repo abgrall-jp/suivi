@@ -94,7 +94,6 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
     try { await api("/api/notes-manuelles", { refId, cle, note: v, trimestre }, true); relireBientot(); } catch (e: any) { setMsg(e.message); charger(true); }
   };
 
-  const [aCopier, setACopier] = useState("final");
   // Ordre des élèves et élèves exclus de la copie, réglés pour coller dans le logiciel de notes (gardés dans ce navigateur, par classe).
   const cleOrdre = `suivi-copie-${classe}`;
   const [reglCopie, setReglCopie] = useState<{ ordre: string[]; exclus: string[] }>({ ordre: [], exclus: [] });
@@ -137,7 +136,7 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
     garder({ ...reglCopie, ordre: ids });
   };
   const basculerExclu = (id: string) => garder({ ...reglCopie, exclus: reglCopie.exclus.includes(id) ? reglCopie.exclus.filter(x => x !== id) : [...reglCopie.exclus, id] });
-  const copier = async (quoi: string = aCopier) => {
+  const copier = async (quoi: string) => {
     const lignes = elevesOrdonnes.filter(e => !reglCopie.exclus.includes(e.id)).map(e => {
       const v = quoi === "final" ? (e.finale ?? e.calculee) : quoi === "calculee" ? e.calculee : e.notes?.[quoi];
       return typeof v === "number" ? note(v) : "0";
@@ -159,10 +158,6 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
           try { const r = await api<{ figees: number }>("/api/bulletin/figer", { trimestre, classe }); setInfo(`${r.figees} note${r.figees > 1 ? "s" : ""} figée${r.figees > 1 ? "s" : ""}.`); charger(); } catch (e: any) { setMsg(e.message); }
         }}>Figer les notes</button>}
         {pret && <button onClick={exporter}>Exporter (tableur)</button>}
-        {pret && <span className="ligne"><select value={aCopier} onChange={e => setACopier(e.target.value)} title="Notes à copier">
-          <option value="final">Note définitive (sinon calculée)</option><option value="calculee">Moyenne calculée</option>
-          {colonnes.map(c => <option key={c.cle} value={c.cle}>{c.titre}</option>)}</select>
-          <button className="principal" title="Copie une note par ligne, dans l'ordre de la classe, à coller dans École Directe" onClick={() => copier()}>Copier la colonne (École Directe)</button></span>}
         {pret && <span className="defilement"><button title="Voir les colonnes de gauche" onClick={() => decaler(-1)}>◀</button><button title="Voir les colonnes de droite" onClick={() => decaler(1)}>▶</button></span>}
         {pret && <BoutonPublier publieLe={b.publieLe || null}
           onPublier={async () => { try { await api("/api/publier/bulletin", { trimestre, classe }); setInfo("Bulletin publié : chaque élève et ses parents voient leur ligne dans l'espace Famille."); await charger(); } catch (e: any) { setMsg(e.message); } }}
