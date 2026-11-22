@@ -497,9 +497,9 @@ function VueTableau({ moi, onAVerifier, allerA, actif }: { moi: Moi; onAVerifier
                     const cle = `${a.id}:${x.id}`;
                     const r = e.resultats[cle];
                     if (saisie === `${e.id}|${cle}`) return <td key={cle} className="saisie"><CaseNote initiale={r?.manuelle ? String(r.percent / 5).replace(".", ",") : ""} onValider={(v, suivant) => saisirNote(e.id, cle, v, suivant)} onAnnuler={() => setSaisie(null)} /></td>;
-                    return <td key={cle} className={`${r ? couleur(r.percent) : "vide"}${r?.manuelle ? " manuelle" : ""}${r?.provisoire && !r.manuelle ? " provisoire" : ""} modifiable`} onClick={() => setSaisie(`${e.id}|${cle}`)}
-                      title={r ? `${r.provisoire && !r.manuelle ? "Note provisoire (exercice en cours) · " : ""}${r.manuelle ? "Saisie à la main" : r.score} · ${dateCourte(r.at)}\nCliquer pour corriger` : "Cliquer pour saisir une note sur 20"}>
-                      {r ? <>{r.score && <span className="note">{r.score.replace(/\s*\/\s*/, "/")}</span>}{Math.round(r.percent)} %{r.provisoire && !r.manuelle && <span className="petit"> (prov.)</span>}</> : ""}
+                    return <td key={cle} className={`${r ? couleur(r.percent) : "vide"}${r?.manuelle ? " manuelle" : ""}${(r?.provisoire || r?.enCours) && !r.manuelle ? " provisoire" : ""} modifiable`} onClick={() => setSaisie(`${e.id}|${cle}`)}
+                      title={r ? `${(r.provisoire || r.enCours) && !r.manuelle ? "Note provisoire (exercice en cours) · " : ""}${r.manuelle ? "Saisie à la main" : r.score} · ${dateCourte(r.at)}\nCliquer pour corriger` : "Cliquer pour saisir une note sur 20"}>
+                      {r ? <>{r.score && <span className="note">{r.score.replace(/\s*\/\s*/, "/")}</span>}{Math.round(r.percent)} %{(r.provisoire || r.enCours) && !r.manuelle && <span className="petit"> (prov.)</span>}</> : ""}
                       {e.autres?.[cle] && <span className={`autre-note ${e.autres[cle].manuelle ? "manuelle-legende" : "appli"}`}
                         title={e.autres[cle].manuelle ? "Note saisie à la main : l'élève a fait mieux ensuite dans l'application, elle ne compte plus" : "Note de l'application : c'est la note saisie à la main qui compte"}>
                         {e.autres[cle].manuelle ? e.autres[cle].score : `${Math.round(e.autres[cle].percent)} %`}</span>}</td>;
