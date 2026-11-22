@@ -762,7 +762,18 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
   const b = (await ref.get()).data() || {};
   const refsClasse = elevesDeClasse(t, classe);
   // Seuls les exercices faits par des élèves de cette classe sont proposés (pas ceux des autres niveaux).
-  const colonnesDispo = toutes.filter(c => refsClasse.some(r => t.essais.get(r.id)?.[c.cle]?.length));
+  const faitParClasse = (cle: string) => refsClasse.some(r => t.essais.get(r.id)?.[cle]?.length);
+  let colonnesDispo = toutes.filter(c => faitParClasse(c.cle));
+  // Option « exercices non commencés » : on peut aussi retenir, à l'avance, un exercice que personne n'a encore fait
+  // (sauf si les classes choisies pour lui dans « Classes par application » excluent celle-ci).
+  if (req.query.tout === "1") {
+    const dejaFait = (cle: string) => [...t.essais.values()].some(p => p[cle]?.length);
+    const admise = (cle: string) => { const p = t.classesApps?.[cle]?.length ? t.classesApps[cle] : t.classesApps?.[cle.split(":")[0]]?.length ? t.classesApps[cle.split(":")[0]] : null; return !p || p.includes(classe); };
+    const dispo = new Set(colonnesDispo.map(c => c.cle));
+    const plus = t.applicationsToutes.flatMap(a => a.exercices.map(x => ({ cle: `${a.id}:${x.id}`, app: a.nom, titre: x.titre })))
+      .filter(c => !dispo.has(c.cle) && !dejaFait(c.cle) && admise(c.cle));
+    colonnesDispo = [...colonnesDispo, ...plus];
+  }
   const titreDe = new Map(toutes.map(c => [c.cle, c.titre]));
   const colonnes: { cle: string; app: string; titre: string; coef: number }[] = (Array.isArray(b.colonnes) ? b.colonnes : [])
     .map((c: any) => ({ cle: String(c.cle), app: String(c.app || ""), titre: titreDe.get(c.cle) || String(c.titre || ""), coef: lireCoef(c.coef) }));

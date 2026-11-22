@@ -244,16 +244,24 @@ function ReglageColonnes({ b, trimestre, classe, onFini }: { b: Bulletin; trimes
   const [externes, setExternes] = useState<Externe[]>(b.externes || []);
   const [nouvelle, setNouvelle] = useState("");
   const [msg, setMsg] = useState("");
+  const [tout, setTout] = useState(false); // proposer aussi les exercices que personne n'a commencés
+  const [plus, setPlus] = useState<Colonne[]>([]);
+  useEffect(() => {
+    if (!tout) { setPlus([]); return; }
+    api<Bulletin>(`/api/bulletin?trimestre=${trimestre}&classe=${encodeURIComponent(classe)}&tout=1`, undefined, true)
+      .then(d => setPlus(d.colonnesDispo.filter(c => !b.colonnesDispo.some(x => x.cle === c.cle)))).catch(e => setMsg(e.message));
+  }, [tout, trimestre, classe]);
   const parApp = new Map<string, Colonne[]>();
   // Les colonnes déjà retenues restent proposées, même si l'exercice n'a plus de résultat.
-  for (const c of [...b.colonnesDispo, ...(b.colonnes || []).filter(x => !b.colonnesDispo.some(d => d.cle === x.cle))]) parApp.set(c.app, [...(parApp.get(c.app) || []), c]);
+  for (const c of [...b.colonnesDispo, ...plus, ...(b.colonnes || []).filter(x => !b.colonnesDispo.some(d => d.cle === x.cle) && !plus.some(d => d.cle === x.cle))]) parApp.set(c.app, [...(parApp.get(c.app) || []), c]);
   const basculer = (cle: string) => setCoches(c => (c.includes(cle) ? c.filter(x => x !== cle) : [...c, cle]));
 
   return (
     <div className="carte reglage">
       <h3>Notes reprises dans le bulletin</h3>
       <p className="petit">Cochez les exercices qui comptent pour ce trimestre et donnez-leur un coefficient. Seuls les exercices faits par les élèves de cette classe sont proposés. La moyenne calculée est la moyenne de ces notes, avec leurs coefficients, sur 20.</p>
-      {!b.colonnesDispo.length && <p>Pas encore d'exercice avec des résultats pour cette classe.</p>}
+      <label className="petit"><input type="checkbox" checked={tout} onChange={e => setTout(e.target.checked)} /> Proposer aussi les exercices non commencés</label>
+      {!b.colonnesDispo.length && !plus.length && <p>Pas encore d'exercice avec des résultats pour cette classe.</p>}
       {Array.from(parApp.entries()).map(([app, cols]) => (
         <fieldset key={app}>
           <legend>{app}</legend>
