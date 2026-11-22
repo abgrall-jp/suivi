@@ -124,6 +124,11 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
     const rang = new Map(reglCopie.ordre.map((id, i) => [id, i]));
     return base.map((e, i) => ({ e, i })).sort((x, y) => (rang.get(x.e.id) ?? 1e6 + x.i) - (rang.get(y.e.id) ?? 1e6 + y.i)).map(x => x.e);
   })();
+  // Moyenne de la classe (élèves décochés exclus) ; un exercice non fait compte 0, comme dans la moyenne calculée.
+  const moyClasse = (val: (e: (typeof elevesOrdonnes)[number]) => number | null | undefined) => {
+    const v = elevesOrdonnes.filter(e => !reglCopie.exclus.includes(e.id)).map(val).filter((x): x is number => typeof x === "number");
+    return v.length ? note(Math.round(v.reduce((a, x) => a + x, 0) / v.length * 10) / 10) : "";
+  };
   const deplacer = (id: string, sens: -1 | 1) => {
     const ids = elevesOrdonnes.map(e => e.id);
     const i = ids.indexOf(id), j = i + sens;
@@ -175,12 +180,12 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
             <table className="tableau bulletin">
               <thead><tr>
                 <th className="fixe">Élève</th>
-                {colonnes.map(c => <th key={c.cle} className="exo" title={`${c.app} : ${c.titre}`}><span className="app-col">{c.app}</span><button className="copier-col" title="Copier les notes de cette colonne (une par ligne) pour École Directe" onClick={() => copier(c.cle)}>📋 Copier</button><EnteteColonne titre={c.titre} />
+                {colonnes.map(c => <th key={c.cle} className="exo" title={`${c.app} : ${c.titre}`}><span className="app-col">{c.app}</span><span className="moy-classe" title="Moyenne de la classe (élèves décochés exclus ; non fait = 0)">classe : {moyClasse(e => e.notes?.[c.cle] ?? 0) || "–"}</span><button className="copier-col" title="Copier les notes de cette colonne (une par ligne) pour École Directe" onClick={() => copier(c.cle)}>📋 Copier</button><EnteteColonne titre={c.titre} />
                   <span className="coef">coef. <ChampCoef valeur={c.coef ?? 1} onValider={async v => {
                     setMsg("");
                     try { await api("/api/bulletin/colonnes", { trimestre, classe, colonnes: colonnes.map(x => (x.cle === c.cle ? { ...x, coef: v } : x)), externes }); await charger(); } catch (e: any) { setMsg(e.message); }
                   }} /></span></th>)}
-                <th>Moyenne calculée<button className="copier-col" title="Copier les moyennes calculées pour École Directe" onClick={() => copier("calculee")}>📋 Copier</button></th><th>Définitive<button className="copier-col" title="Copier les notes définitives (sinon calculées) pour École Directe" onClick={() => copier("final")}>📋 Copier</button></th>
+                <th>Moyenne calculée<span className="moy-classe" title="Moyenne de la classe (élèves décochés exclus)">classe : {moyClasse(e => e.calculee) || "–"}</span><button className="copier-col" title="Copier les moyennes calculées pour École Directe" onClick={() => copier("calculee")}>📋 Copier</button></th><th>Définitive<span className="moy-classe" title="Moyenne de la classe (élèves décochés exclus)">classe : {moyClasse(e => e.finale ?? e.calculee) || "–"}</span><button className="copier-col" title="Copier les notes définitives (sinon calculées) pour École Directe" onClick={() => copier("final")}>📋 Copier</button></th>
                 {externes.map(x => <th key={x.id}>{x.titre}</th>)}
                 <th>Appréciation de l'élève<span className="coef">Studio, partie élève</span></th>
                 <th>Appréciation du professeur<span className="coef">{b.studioRelie ? "reprise du Studio, modifiable" : "à écrire"}</span></th>
