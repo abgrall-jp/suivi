@@ -109,6 +109,17 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
     a.click();
   };
 
+  // Une colonne de notes à coller dans un logiciel de notes (École Directe) : une note par ligne, dans l'ordre de la classe.
+  const [aCopier, setACopier] = useState("final");
+  const copier = async () => {
+    const lignes = (b.eleves || []).map(e => {
+      const v = aCopier === "final" ? (e.finale ?? e.calculee) : aCopier === "calculee" ? e.calculee : e.notes?.[aCopier];
+      return typeof v === "number" ? note(v) : "";
+    });
+    try { await navigator.clipboard.writeText(lignes.join("\n")); setInfo(`${lignes.length} lignes copiées : collez-les dans la colonne du logiciel de notes (même ordre que la liste ci-dessous).`); }
+    catch { setMsg("Copie impossible : autorisez le presse-papiers pour ce site."); }
+  };
+
   const decaler = (sens: number) => defile.current?.scrollBy({ left: sens * Math.max(300, defile.current.clientWidth * 0.7), behavior: "smooth" });
 
   return (
@@ -122,6 +133,10 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
           try { const r = await api<{ figees: number }>("/api/bulletin/figer", { trimestre, classe }); setInfo(`${r.figees} note${r.figees > 1 ? "s" : ""} figée${r.figees > 1 ? "s" : ""}.`); charger(); } catch (e: any) { setMsg(e.message); }
         }}>Figer les notes</button>}
         {pret && <button onClick={exporter}>Exporter (tableur)</button>}
+        {pret && <span className="ligne"><select value={aCopier} onChange={e => setACopier(e.target.value)} title="Notes à copier">
+          <option value="final">Note définitive (sinon calculée)</option><option value="calculee">Moyenne calculée</option>
+          {colonnes.map(c => <option key={c.cle} value={c.cle}>{c.titre}</option>)}</select>
+          <button title="Copie une note par ligne, dans l'ordre de la classe, à coller dans École Directe" onClick={copier}>Copier la colonne</button></span>}
         {pret && <span className="defilement"><button title="Voir les colonnes de gauche" onClick={() => decaler(-1)}>◀</button><button title="Voir les colonnes de droite" onClick={() => decaler(1)}>▶</button></span>}
         {pret && <BoutonPublier publieLe={b.publieLe || null}
           onPublier={async () => { try { await api("/api/publier/bulletin", { trimestre, classe }); setInfo("Bulletin publié : chaque élève et ses parents voient leur ligne dans l'espace Famille."); await charger(); } catch (e: any) { setMsg(e.message); } }}

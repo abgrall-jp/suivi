@@ -14,7 +14,7 @@ import { empreinteCode as empreinteCodeFamille, genererCode, lireJeton, normalis
 import { textesParEleve, type TextesStudio } from "./lib/studio.ts";
 import { noteDeResultat, trimestresCommences } from "./lib/sequenceur.ts";
 import { plansDe, remarquesParEleve, type PlanPublie, type RemarqueEleve } from "./lib/planclasse.ts";
-import { fusionnerEvalIA } from "./lib/evaliaMoyenne.ts";
+import { colonnesFusionnees, fusionnerEvalIA } from "./lib/evaliaMoyenne.ts";
 import { colonnesManuelles, dateDansTrimestre, dateValide, essaiQuiCompte, essaiRetenu, estTrimestre, lireCoef, lireNote, moyenne, noteColonne, noteSur20, periodesParDefaut, TRIMESTRES, type Periodes, type Trimestre } from "./lib/bulletin.ts";
 
 // ---------------------------------------------------------------------------
@@ -666,6 +666,7 @@ async function calculerTableauSansMemo(e: Enseignant, frais = false) {
     provisoire, refs, presents, essais, plusRecent, resultat,
     applications: fusion.applications,
     applicationsToutes: fusion.applicationsToutes,
+    themesMoyenne: fusion.themes,
     aVerifier: resultat.filter(r => (r.statut === "a_verifier" || r.statut === "aucun") && !exclu({ id: "", nom: r.nom, prenom: "", classe: r.classe })).length,
     masquees: Array.isArray(fe.colonnesMasquees) ? fe.colonnesMasquees.map(String) as string[] : [],
     classesApps,
@@ -775,8 +776,9 @@ app.get("/api/bulletin", exigerEnseignant(), route(async (req, res) => {
     colonnesDispo = [...colonnesDispo, ...plus];
   }
   const titreDe = new Map(toutes.map(c => [c.cle, c.titre]));
-  const colonnes: { cle: string; app: string; titre: string; coef: number }[] = (Array.isArray(b.colonnes) ? b.colonnes : [])
-    .map((c: any) => ({ cle: String(c.cle), app: String(c.app || ""), titre: titreDe.get(c.cle) || String(c.titre || ""), coef: lireCoef(c.coef) }));
+  const colonnes: { cle: string; app: string; titre: string; coef: number }[] = colonnesFusionnees((Array.isArray(b.colonnes) ? b.colonnes : [])
+    .map((c: any) => ({ cle: String(c.cle), app: String(c.app || ""), titre: String(c.titre || ""), coef: lireCoef(c.coef) })), t.themesMoyenne)
+    .map(c => ({ ...c, titre: titreDe.get(c.cle) || c.titre }));
   const externes: { id: string; titre: string }[] = Array.isArray(b.externes) ? b.externes : [];
   const notes: Record<string, any> = b.eleves || {};
   const f = await fiche(e);
@@ -885,7 +887,7 @@ app.post("/api/bulletin/figer", exigerEnseignant(), route(async (req, res) => {
   const le = new Date().toISOString();
   for (const r of elevesDeClasse(t, classe)) {
     if (typeof b.eleves?.[r.id]?.finale === "number") continue;
-    const n = noteSur20(t.essais.get(r.id) || {}, b.colonnes, per[trimestre]);
+    const n = noteSur20(t.essais.get(r.id) || {}, colonnesFusionnees(b.colonnes, t.themesMoyenne), per[trimestre]);
     if (n !== null) maj[r.id] = { finale: n, figeeLe: le };
   }
   await ref.set({ eleves: maj, majLe: le }, { merge: true });
@@ -1297,7 +1299,7 @@ app.post("/api/publier/bulletin", exigerEnseignant(), route(async (req, res) => 
   const t = await calculerTableau(e, true);
   const refs = elevesDeClasse(t, classe).filter(r => !seul || r.id === seul);
   if (seul && !refs.length) throw httpError(404, "Cet élève n'est pas dans cette classe.");
-  const colonnes = (b.colonnes as any[]).map(c => ({ cle: String(c.cle), titre: String(c.titre || ""), coef: lireCoef(c.coef) }));
+  const colonnes = colonnesFusionnees((b.colonnes as any[]).map(c => ({ cle: String(c.cle), titre: String(c.titre || ""), coef: lireCoef(c.coef) })), t.themesMoyenne);
   const externes: { id: string; titre: string }[] = Array.isArray(b.externes) ? b.externes : [];
   const eleves: Record<string, any> = {};
   for (const r of refs) {
@@ -1794,7 +1796,7 @@ app.get("/api/sequenceur/eleve", exigerSequenceur(), route(async (req, res) => {
       const b = docs[3 * i].data();
       if (!b?.colonnes?.length) return;
       const pub = plusRecentes([docs[3 * i + 1].data(), docs[3 * i + 2].data()].filter(Boolean))[0];
-      const colonnes = (b.colonnes as any[]).map(c => ({ cle: String(c.cle), app: String(c.app || ""), titre: String(c.titre || ""), coef: lireCoef(c.coef) }));
+      const colonnes = colonnesFusionnees((b.colonnes as any[]).map(c => ({ cle: String(c.cle), app: String(c.app || ""), titre: String(c.titre || ""), coef: lireCoef(c.coef) })), t.themesMoyenne);
       const finale = b.eleves?.[ref.id]?.finale;
       bulletins.push({
         trimestre: tr, enseignant: String(b.nom || ""), periode: per[tr],

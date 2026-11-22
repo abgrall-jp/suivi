@@ -26,10 +26,26 @@ export function themesEvalIA(app: App | undefined): Map<string, { quiz: Ex; chat
   return new Map([...m].filter((e): e is [string, { quiz: Ex; chatbot: Ex }] => !!e[1].quiz && !!e[1].chatbot));
 }
 
+/** Colonnes de bulletin déjà enregistrées sur le quiz ou le chatbot d'un thème regroupé : remplacées par la colonne moyenne (une seule fois). */
+export function colonnesFusionnees<C extends { cle: string; titre?: string }>(colonnes: C[], themes: Set<string> | undefined): C[] {
+  if (!themes?.size) return colonnes;
+  const vues = new Set<string>();
+  const sortie: C[] = [];
+  for (const c of colonnes) {
+    const m = /^evalia:(.+)~(ai-quiz|chatbot)$/.exec(c.cle);
+    if (!m || !themes.has(m[1])) { sortie.push(c); continue; }
+    const cle = `evalia:${m[1]}~moyenne`;
+    if (vues.has(cle)) continue;
+    vues.add(cle);
+    sortie.push({ ...c, cle, ...(c.titre !== undefined ? { titre: c.titre.replace(SUFFIXE, "") + " (moyenne quiz + chatbot)" } : {}) });
+  }
+  return sortie;
+}
+
 /** Remplace, dans les listes d'exercices, chaque couple quiz + chatbot par une colonne « moyenne » ; calcule les essais de ces colonnes. */
-export function fusionnerEvalIA<A extends App>(applications: A[], applicationsToutes: A[], essais: Map<string, Record<string, EssaiEx[]>>): { applications: A[]; applicationsToutes: A[] } {
+export function fusionnerEvalIA<A extends App>(applications: A[], applicationsToutes: A[], essais: Map<string, Record<string, EssaiEx[]>>): { applications: A[]; applicationsToutes: A[]; themes: Set<string> } {
   const themes = themesEvalIA(applicationsToutes.find(a => a.id === "evalia"));
-  if (!themes.size) return { applications, applicationsToutes };
+  if (!themes.size) return { applications, applicationsToutes, themes: new Set() };
   const parties = new Set([...themes.values()].flatMap(t => [t.quiz.id, t.chatbot.id]));
   const transformer = (liste: A[]) => liste.map(a => {
     if (a.id !== "evalia") return a;
@@ -62,5 +78,5 @@ export function fusionnerEvalIA<A extends App>(applications: A[], applicationsTo
       parExo[cle] = [...(parExo[cle] || []), calcule];
     }
   }
-  return { applications: transformer(applications), applicationsToutes: transformer(applicationsToutes) };
+  return { applications: transformer(applications), applicationsToutes: transformer(applicationsToutes), themes: new Set(themes.keys()) };
 }
