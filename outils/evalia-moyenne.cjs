@@ -22,6 +22,7 @@ var evaliaMoyenne_exports = {};
 __export(evaliaMoyenne_exports, {
   COEF_CHATBOT: () => COEF_CHATBOT,
   COEF_QUIZ: () => COEF_QUIZ,
+  colonnesFusionnees: () => colonnesFusionnees,
   fusionnerEvalIA: () => fusionnerEvalIA,
   themesEvalIA: () => themesEvalIA
 });
@@ -57,9 +58,26 @@ function themesEvalIA(app) {
   }
   return new Map([...m].filter((e) => !!e[1].quiz && !!e[1].chatbot));
 }
+function colonnesFusionnees(colonnes, themes) {
+  if (!themes?.size) return colonnes;
+  const vues = /* @__PURE__ */ new Set();
+  const sortie = [];
+  for (const c of colonnes) {
+    const m = /^evalia:(.+)~(ai-quiz|chatbot)$/.exec(c.cle);
+    if (!m || !themes.has(m[1])) {
+      sortie.push(c);
+      continue;
+    }
+    const cle = `evalia:${m[1]}~moyenne`;
+    if (vues.has(cle)) continue;
+    vues.add(cle);
+    sortie.push({ ...c, cle, ...c.titre !== void 0 ? { titre: c.titre.replace(SUFFIXE, "") + " (moyenne quiz + chatbot)" } : {} });
+  }
+  return sortie;
+}
 function fusionnerEvalIA(applications, applicationsToutes, essais) {
   const themes = themesEvalIA(applicationsToutes.find((a) => a.id === "evalia"));
-  if (!themes.size) return { applications, applicationsToutes };
+  if (!themes.size) return { applications, applicationsToutes, themes: /* @__PURE__ */ new Set() };
   const parties = new Set([...themes.values()].flatMap((t) => [t.quiz.id, t.chatbot.id]));
   const transformer = (liste) => liste.map((a) => {
     if (a.id !== "evalia") return a;
@@ -94,12 +112,13 @@ function fusionnerEvalIA(applications, applicationsToutes, essais) {
       parExo[cle] = [...parExo[cle] || [], calcule];
     }
   }
-  return { applications: transformer(applications), applicationsToutes: transformer(applicationsToutes) };
+  return { applications: transformer(applications), applicationsToutes: transformer(applicationsToutes), themes: new Set(themes.keys()) };
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   COEF_CHATBOT,
   COEF_QUIZ,
+  colonnesFusionnees,
   fusionnerEvalIA,
   themesEvalIA
 });

@@ -1,0 +1,97 @@
+--- /tmp/claude/old-server.cjs	2026-11-22 21:05:07.303463236 +0000
++++ /tmp/claude/new-server.cjs	2026-11-22 21:05:07.547463250 +0000
+@@ -534,9 +534,26 @@
+   }
+   return new Map([...m].filter((e) => !!e[1].quiz && !!e[1].chatbot));
+ }
++function colonnesFusionnees(colonnes, themes) {
++  if (!themes?.size) return colonnes;
++  const vues = /* @__PURE__ */ new Set();
++  const sortie = [];
++  for (const c of colonnes) {
++    const m = /^evalia:(.+)~(ai-quiz|chatbot)$/.exec(c.cle);
++    if (!m || !themes.has(m[1])) {
++      sortie.push(c);
++      continue;
++    }
++    const cle = `evalia:${m[1]}~moyenne`;
++    if (vues.has(cle)) continue;
++    vues.add(cle);
++    sortie.push({ ...c, cle, ...c.titre !== void 0 ? { titre: c.titre.replace(SUFFIXE, "") + " (moyenne quiz + chatbot)" } : {} });
++  }
++  return sortie;
++}
+ function fusionnerEvalIA(applications, applicationsToutes, essais) {
+   const themes = themesEvalIA(applicationsToutes.find((a) => a.id === "evalia"));
+-  if (!themes.size) return { applications, applicationsToutes };
++  if (!themes.size) return { applications, applicationsToutes, themes: /* @__PURE__ */ new Set() };
+   const parties = new Set([...themes.values()].flatMap((t) => [t.quiz.id, t.chatbot.id]));
+   const transformer = (liste) => liste.map((a) => {
+     if (a.id !== "evalia") return a;
+@@ -571,7 +588,7 @@
+       parExo[cle] = [...parExo[cle] || [], calcule];
+     }
+   }
+-  return { applications: transformer(applications), applicationsToutes: transformer(applicationsToutes) };
++  return { applications: transformer(applications), applicationsToutes: transformer(applicationsToutes), themes: new Set(themes.keys()) };
+ }
+ 
+ // server.ts
+@@ -1166,6 +1183,7 @@
+     resultat,
+     applications: fusion.applications,
+     applicationsToutes: fusion.applicationsToutes,
++    themesMoyenne: fusion.themes,
+     aVerifier: resultat.filter((r) => (r.statut === "a_verifier" || r.statut === "aucun") && !exclu({ id: "", nom: r.nom, prenom: "", classe: r.classe })).length,
+     masquees: Array.isArray(fe.colonnesMasquees) ? fe.colonnesMasquees.map(String) : [],
+     classesApps
+@@ -1243,9 +1261,20 @@
+   const ref = db.doc(`bulletins/${idBulletin(e.uid, trimestre, classe)}`);
+   const b = (await ref.get()).data() || {};
+   const refsClasse = elevesDeClasse(t, classe);
+-  const colonnesDispo = toutes.filter((c) => refsClasse.some((r) => t.essais.get(r.id)?.[c.cle]?.length));
++  const faitParClasse = (cle) => refsClasse.some((r) => t.essais.get(r.id)?.[cle]?.length);
++  let colonnesDispo = toutes.filter((c) => faitParClasse(c.cle));
++  if (req.query.tout === "1") {
++    const dejaFait = (cle) => [...t.essais.values()].some((p) => p[cle]?.length);
++    const admise = (cle) => {
++      const p = t.classesApps?.[cle]?.length ? t.classesApps[cle] : t.classesApps?.[cle.split(":")[0]]?.length ? t.classesApps[cle.split(":")[0]] : null;
++      return !p || p.includes(classe);
++    };
++    const dispo = new Set(colonnesDispo.map((c) => c.cle));
++    const plus = t.applicationsToutes.flatMap((a) => a.exercices.map((x) => ({ cle: `${a.id}:${x.id}`, app: a.nom, titre: x.titre }))).filter((c) => !dispo.has(c.cle) && !dejaFait(c.cle) && admise(c.cle));
++    colonnesDispo = [...colonnesDispo, ...plus];
++  }
+   const titreDe = new Map(toutes.map((c) => [c.cle, c.titre]));
+-  const colonnes = (Array.isArray(b.colonnes) ? b.colonnes : []).map((c) => ({ cle: String(c.cle), app: String(c.app || ""), titre: titreDe.get(c.cle) || String(c.titre || ""), coef: lireCoef(c.coef) }));
++  const colonnes = colonnesFusionnees((Array.isArray(b.colonnes) ? b.colonnes : []).map((c) => ({ cle: String(c.cle), app: String(c.app || ""), titre: String(c.titre || ""), coef: lireCoef(c.coef) })), t.themesMoyenne).map((c) => ({ ...c, titre: titreDe.get(c.cle) || c.titre }));
+   const externes = Array.isArray(b.externes) ? b.externes : [];
+   const notes = b.eleves || {};
+   const f = await fiche(e);
+@@ -1373,7 +1402,7 @@
+   const le = (/* @__PURE__ */ new Date()).toISOString();
+   for (const r of elevesDeClasse(t, classe)) {
+     if (typeof b.eleves?.[r.id]?.finale === "number") continue;
+-    const n = noteSur20(t.essais.get(r.id) || {}, b.colonnes, per[trimestre]);
++    const n = noteSur20(t.essais.get(r.id) || {}, colonnesFusionnees(b.colonnes, t.themesMoyenne), per[trimestre]);
+     if (n !== null) maj[r.id] = { finale: n, figeeLe: le };
+   }
+   await ref.set({ eleves: maj, majLe: le }, { merge: true });
+@@ -1757,7 +1786,7 @@
+   const t = await calculerTableau(e, true);
+   const refs = elevesDeClasse(t, classe).filter((r) => !seul || r.id === seul);
+   if (seul && !refs.length) throw httpError(404, "Cet \xE9l\xE8ve n'est pas dans cette classe.");
+-  const colonnes = b.colonnes.map((c) => ({ cle: String(c.cle), titre: String(c.titre || ""), coef: lireCoef(c.coef) }));
++  const colonnes = colonnesFusionnees(b.colonnes.map((c) => ({ cle: String(c.cle), titre: String(c.titre || ""), coef: lireCoef(c.coef) })), t.themesMoyenne);
+   const externes = Array.isArray(b.externes) ? b.externes : [];
+   const eleves = {};
+   for (const r of refs) {
+@@ -2239,7 +2268,7 @@
+       const b = docs[3 * i].data();
+       if (!b?.colonnes?.length) return;
+       const pub = plusRecentes([docs[3 * i + 1].data(), docs[3 * i + 2].data()].filter(Boolean))[0];
+-      const colonnes = b.colonnes.map((c) => ({ cle: String(c.cle), app: String(c.app || ""), titre: String(c.titre || ""), coef: lireCoef(c.coef) }));
++      const colonnes = colonnesFusionnees(b.colonnes.map((c) => ({ cle: String(c.cle), app: String(c.app || ""), titre: String(c.titre || ""), coef: lireCoef(c.coef) })), t.themesMoyenne);
+       const finale = b.eleves?.[ref.id]?.finale;
+       bulletins.push({
+         trimestre: tr,
