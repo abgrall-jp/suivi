@@ -132,9 +132,9 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
     garder({ ...reglCopie, ordre: ids });
   };
   const basculerExclu = (id: string) => garder({ ...reglCopie, exclus: reglCopie.exclus.includes(id) ? reglCopie.exclus.filter(x => x !== id) : [...reglCopie.exclus, id] });
-  const copier = async () => {
+  const copier = async (quoi: string = aCopier) => {
     const lignes = elevesOrdonnes.filter(e => !reglCopie.exclus.includes(e.id)).map(e => {
-      const v = aCopier === "final" ? (e.finale ?? e.calculee) : aCopier === "calculee" ? e.calculee : e.notes?.[aCopier];
+      const v = quoi === "final" ? (e.finale ?? e.calculee) : quoi === "calculee" ? e.calculee : e.notes?.[quoi];
       return typeof v === "number" ? note(v) : "0";
     });
     try { await navigator.clipboard.writeText(lignes.join("\n")); setInfo(`${lignes.length} lignes copiées${reglCopie.exclus.length ? ` (${reglCopie.exclus.length} élève${reglCopie.exclus.length > 1 ? "s" : ""} exclu${reglCopie.exclus.length > 1 ? "s" : ""})` : ""} : collez-les dans la colonne du logiciel de notes, dans l'ordre de la liste ci-dessous.`); }
@@ -157,7 +157,7 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
         {pret && <span className="ligne"><select value={aCopier} onChange={e => setACopier(e.target.value)} title="Notes à copier">
           <option value="final">Note définitive (sinon calculée)</option><option value="calculee">Moyenne calculée</option>
           {colonnes.map(c => <option key={c.cle} value={c.cle}>{c.titre}</option>)}</select>
-          <button className="principal" title="Copie une note par ligne, dans l'ordre de la classe, à coller dans École Directe" onClick={copier}>Copier la colonne (École Directe)</button></span>}
+          <button className="principal" title="Copie une note par ligne, dans l'ordre de la classe, à coller dans École Directe" onClick={() => copier()}>Copier la colonne (École Directe)</button></span>}
         {pret && <span className="defilement"><button title="Voir les colonnes de gauche" onClick={() => decaler(-1)}>◀</button><button title="Voir les colonnes de droite" onClick={() => decaler(1)}>▶</button></span>}
         {pret && <BoutonPublier publieLe={b.publieLe || null}
           onPublier={async () => { try { await api("/api/publier/bulletin", { trimestre, classe }); setInfo("Bulletin publié : chaque élève et ses parents voient leur ligne dans l'espace Famille."); await charger(); } catch (e: any) { setMsg(e.message); } }}
@@ -175,12 +175,12 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
             <table className="tableau bulletin">
               <thead><tr>
                 <th className="fixe">Élève</th>
-                {colonnes.map(c => <th key={c.cle} className="exo" title={`${c.app} : ${c.titre}`}><span className="app-col">{c.app}</span><EnteteColonne titre={c.titre} />
+                {colonnes.map(c => <th key={c.cle} className="exo" title={`${c.app} : ${c.titre}`}><span className="app-col">{c.app}</span><button className="copier-col" title="Copier les notes de cette colonne (une par ligne) pour École Directe" onClick={() => copier(c.cle)}>📋 Copier</button><EnteteColonne titre={c.titre} />
                   <span className="coef">coef. <ChampCoef valeur={c.coef ?? 1} onValider={async v => {
                     setMsg("");
                     try { await api("/api/bulletin/colonnes", { trimestre, classe, colonnes: colonnes.map(x => (x.cle === c.cle ? { ...x, coef: v } : x)), externes }); await charger(); } catch (e: any) { setMsg(e.message); }
                   }} /></span></th>)}
-                <th>Moyenne calculée</th><th>Définitive</th>
+                <th>Moyenne calculée<button className="copier-col" title="Copier les moyennes calculées pour École Directe" onClick={() => copier("calculee")}>📋 Copier</button></th><th>Définitive<button className="copier-col" title="Copier les notes définitives (sinon calculées) pour École Directe" onClick={() => copier("final")}>📋 Copier</button></th>
                 {externes.map(x => <th key={x.id}>{x.titre}</th>)}
                 <th>Appréciation de l'élève<span className="coef">Studio, partie élève</span></th>
                 <th>Appréciation du professeur<span className="coef">{b.studioRelie ? "reprise du Studio, modifiable" : "à écrire"}</span></th>

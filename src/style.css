@@ -232,3 +232,5 @@ button.lien-nom:hover { text-decoration: underline; }
 tr.hors-copie td { opacity: 0.45; }
 
 .bulletin th .app-col { display: block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--accent); }
+
+.bulletin th .copier-col { display: block; margin: 2px auto 3px; padding: 1px 6px; font-size: 11px; font-weight: 600; }
