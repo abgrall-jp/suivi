@@ -5,7 +5,7 @@
 export type Trimestre = "T1" | "T2" | "T3";
 export const TRIMESTRES: Trimestre[] = ["T1", "T2", "T3"];
 export type Periodes = Record<Trimestre, { debut: string; fin: string }>; // dates AAAA-MM-JJ, fin incluse
-export type Essai = { percent: number; at: number | null; manuelle?: boolean }; // manuelle : note saisie par l'enseignant
+export type Essai = { percent: number; at: number | null; manuelle?: boolean; provisoire?: boolean }; // manuelle : note saisie par l'enseignant
 
 /** Trimestres de l'année scolaire en cours (septembre à juillet) : 1er sept.–30 nov., 1er déc.–fin février, 1er mars–14 juillet. */
 export function periodesParDefaut(maintenant = new Date()): Periodes {
@@ -34,26 +34,31 @@ export function lireCoef(v: unknown): number {
   return Number.isFinite(n) && n > 0 ? Math.min(10, Math.max(0.5, Math.round(n * 2) / 2)) : 1;
 }
 
-/** Essai retenu pour une colonne : le dernier fait pendant le trimestre (un essai sans date compte toujours). */
+/** Essai retenu pour une colonne : le meilleur fait pendant le trimestre (un essai sans date compte toujours). */
 export function essaiRetenu(essais: Essai[] | undefined, periode: { debut: string; fin: string }): Essai | null {
   const { debut, fin } = bornes(periode);
   return essaiQuiCompte((essais || []).filter(e => e.at === null || (e.at >= debut && e.at <= fin)));
 }
 
 const plusRecent = <T extends Essai>(liste: T[]) => liste.reduce((m, x) => ((x.at ?? 0) >= (m.at ?? 0) ? x : m));
+/** La meilleure note ; à note égale, une note définitive avant une note provisoire (exercice en cours), puis la plus récente. */
+const meilleur = <T extends Essai>(liste: T[]) => liste.reduce((m, x) =>
+  x.percent !== m.percent ? (x.percent > m.percent ? x : m)
+    : !!x.provisoire !== !!m.provisoire ? (x.provisoire ? m : x)
+    : (x.at ?? 0) >= (m.at ?? 0) ? x : m);
 
 /**
  * Essai qui compte parmi ceux d'une colonne. La note saisie à la main par l'enseignant compte, sauf si l'élève a
  * fait mieux ensuite dans l'application : ce résultat plus récent et meilleur la remplace.
- * Sans note saisie : le dernier essai.
+ * Sans note saisie : la meilleure note.
  */
 export function essaiQuiCompte<T extends Essai>(essais: T[]): T | null {
   if (!essais.length) return null;
   const manuelles = essais.filter(e => e.manuelle), appli = essais.filter(e => !e.manuelle);
-  if (!manuelles.length || !appli.length) return plusRecent(essais);
+  if (!manuelles.length || !appli.length) return meilleur(essais);
   const m = plusRecent(manuelles);
   const meilleurEnsuite = appli.filter(e => (e.at ?? 0) > (m.at ?? 0) && e.percent > m.percent);
-  return meilleurEnsuite.length ? plusRecent(meilleurEnsuite) : m;
+  return meilleurEnsuite.length ? meilleur(meilleurEnsuite) : m;
 }
 
 const sur20 = (percent: number) => Math.round(Math.max(0, Math.min(100, percent)) / 5 * 10) / 10;

@@ -44,7 +44,7 @@ export type Tableau = {
   applications: { id: string; code: string; nom: string; erreur: string | null; exercices: { id: string; titre: string }[] }[];
   /** Tous les exercices donnés, même sans résultat (absent d'un ancien serveur). */
   applicationsToutes?: { id: string; code: string; nom: string; erreur: string | null; exercices: { id: string; titre: string }[] }[];
-  eleves: { id: string; classe: string; nom: string; prenom: string; resultats: Record<string, { percent: number; score: string; at: number | null; manuelle?: boolean }>; autres?: Record<string, { percent: number; score: string; at: number | null; manuelle?: boolean }> }[];
+  eleves: { id: string; classe: string; nom: string; prenom: string; resultats: Record<string, { percent: number; score: string; at: number | null; manuelle?: boolean; provisoire?: boolean }>; autres?: Record<string, { percent: number; score: string; at: number | null; manuelle?: boolean }> }[];
   aVerifier: number;
   masquees: string[];
   classesApps?: Record<string, string[]>;

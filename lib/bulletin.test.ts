@@ -55,5 +55,7 @@ test("note saisie remplacée seulement si l'élève fait mieux ensuite", () => {
   assert.equal(essaiQuiCompte([m, { percent: 80, at: 200 }])?.percent, 80); // mieux, après : remplace
   assert.equal(essaiQuiCompte([m, { percent: 40, at: 200 }])?.percent, 60); // moins bien, après : la note saisie reste
   assert.equal(essaiQuiCompte([{ percent: 90, at: 50 }, m])?.percent, 60); // mieux, mais avant la saisie : la note saisie compte
-  assert.equal(essaiQuiCompte([{ percent: 30, at: 50 }, { percent: 70, at: 60 }])?.percent, 70); // sans saisie : le dernier essai
+  assert.equal(essaiQuiCompte([{ percent: 30, at: 50 }, { percent: 70, at: 60 }])?.percent, 70);
+  assert.equal(essaiQuiCompte([{ percent: 80, at: 50 }, { percent: 70, at: 60 }])?.percent, 80); // sans saisie : la meilleure note
+  assert.equal(essaiQuiCompte([{ percent: 80, at: 50, provisoire: true }, { percent: 80, at: 40 }])?.provisoire, undefined); // à égalité : la définitive
 });

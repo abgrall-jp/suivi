@@ -218,7 +218,7 @@ type Donnees = {
   classes: { id: string; name: string }[];
   students: { id: string; name: string; classId: string; className: string; provisionalPassword?: boolean; parentPasswords?: number[] }[];
   exercises: { id: string; title: string }[];
-  results: { id: string; studentId: string; exerciseId: string; exerciseTitle: string; percent: number; score: string; completedAt: number | null }[];
+  results: { id: string; studentId: string; exerciseId: string; exerciseTitle: string; percent: number; score: string; completedAt: number | null; enCours?: boolean }[];
 };
 const cacheDonnees = new Map<string, { at: number; data: Donnees }>();
 const lecturesEnCours = new Map<string, Promise<Donnees>>();
@@ -511,7 +511,7 @@ async function lireApplications(e: Enseignant, frais = false) {
   return lus;
 }
 
-type Resultat = { percent: number; score: string; at: number | null; manuelle?: boolean };
+type Resultat = { percent: number; score: string; at: number | null; manuelle?: boolean; provisoire?: boolean };
 
 /** Appréciation retenue : celle écrite par l'enseignant dans Suivi, sinon celle de la partie prof du Studio. */
 const appreciationDe = (n: any, studioProf: unknown) => (typeof n?.appreciation === "string" ? n.appreciation : String(studioProf || ""));
@@ -614,7 +614,7 @@ async function calculerTableauSansMemo(e: Enseignant, frais = false) {
       const refId = refDe.get(`${a.id}:${r.studentId}`);
       if (!refId) continue;
       const parExo = essais.get(refId) || {};
-      (parExo[`${a.id}:${r.exerciseId}`] ||= []).push({ percent: Number(r.percent) || 0, score: String(r.score || ""), at: r.completedAt ?? null });
+      (parExo[`${a.id}:${r.exerciseId}`] ||= []).push({ percent: Number(r.percent) || 0, score: String(r.score || ""), at: r.completedAt ?? null, ...(r.enCours ? { provisoire: true } : {}) });
       essais.set(refId, parExo);
     }
   }
