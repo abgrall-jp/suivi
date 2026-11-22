@@ -226,3 +226,7 @@ button.lien-nom:hover { text-decoration: underline; }
 .tableau td .parts { display: block; font-size: 0.72em; font-weight: normal; opacity: 0.85; line-height: 1.2; }
 .tableau td .parts span { display: block; white-space: nowrap; }
 .tableau td .parts .prov { font-style: italic; }
+
+.ordre-copie { display: inline-flex; align-items: center; gap: 2px; margin-right: 6px; }
+.ordre-copie button { padding: 0 3px; font-size: 11px; }
+tr.hors-copie td { opacity: 0.45; }

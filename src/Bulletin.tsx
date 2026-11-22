@@ -94,6 +94,14 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
     try { await api("/api/notes-manuelles", { refId, cle, note: v, trimestre }, true); relireBientot(); } catch (e: any) { setMsg(e.message); charger(true); }
   };
 
+  const [aCopier, setACopier] = useState("final");
+  // Ordre des élèves et élèves exclus de la copie, réglés pour coller dans le logiciel de notes (gardés dans ce navigateur, par classe).
+  const cleOrdre = `suivi-copie-${classe}`;
+  const [reglCopie, setReglCopie] = useState<{ ordre: string[]; exclus: string[] }>({ ordre: [], exclus: [] });
+  useEffect(() => {
+    try { const v = JSON.parse(localStorage.getItem(cleOrdre) || "null"); setReglCopie({ ordre: Array.isArray(v?.ordre) ? v.ordre : [], exclus: Array.isArray(v?.exclus) ? v.exclus : [] }); }
+    catch { setReglCopie({ ordre: [], exclus: [] }); }
+  }, [cleOrdre]);
   if (!b || !trimestre) return msg ? <p className="erreur">{msg}</p> : <p>Chargement…</p>;
   const externes = b.externes || [];
   const colonnes = b.colonnes || [];
@@ -110,13 +118,26 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
   };
 
   // Une colonne de notes à coller dans un logiciel de notes (École Directe) : une note par ligne, dans l'ordre de la classe.
-  const [aCopier, setACopier] = useState("final");
+  const garder = (r: { ordre: string[]; exclus: string[] }) => { setReglCopie(r); try { localStorage.setItem(cleOrdre, JSON.stringify(r)); } catch { /* sans stockage : réglage pour cette page seulement */ } };
+  const elevesOrdonnes = (() => {
+    const base = b.eleves || [];
+    const rang = new Map(reglCopie.ordre.map((id, i) => [id, i]));
+    return base.map((e, i) => ({ e, i })).sort((x, y) => (rang.get(x.e.id) ?? 1e6 + x.i) - (rang.get(y.e.id) ?? 1e6 + y.i)).map(x => x.e);
+  })();
+  const deplacer = (id: string, sens: -1 | 1) => {
+    const ids = elevesOrdonnes.map(e => e.id);
+    const i = ids.indexOf(id), j = i + sens;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    garder({ ...reglCopie, ordre: ids });
+  };
+  const basculerExclu = (id: string) => garder({ ...reglCopie, exclus: reglCopie.exclus.includes(id) ? reglCopie.exclus.filter(x => x !== id) : [...reglCopie.exclus, id] });
   const copier = async () => {
-    const lignes = (b.eleves || []).map(e => {
+    const lignes = elevesOrdonnes.filter(e => !reglCopie.exclus.includes(e.id)).map(e => {
       const v = aCopier === "final" ? (e.finale ?? e.calculee) : aCopier === "calculee" ? e.calculee : e.notes?.[aCopier];
       return typeof v === "number" ? note(v) : "";
     });
-    try { await navigator.clipboard.writeText(lignes.join("\n")); setInfo(`${lignes.length} lignes copiées : collez-les dans la colonne du logiciel de notes (même ordre que la liste ci-dessous).`); }
+    try { await navigator.clipboard.writeText(lignes.join("\n")); setInfo(`${lignes.length} lignes copiées${reglCopie.exclus.length ? ` (${reglCopie.exclus.length} élève${reglCopie.exclus.length > 1 ? "s" : ""} exclu${reglCopie.exclus.length > 1 ? "s" : ""})` : ""} : collez-les dans la colonne du logiciel de notes, dans l'ordre de la liste ci-dessous.`); }
     catch { setMsg("Copie impossible : autorisez le presse-papiers pour ce site."); }
   };
 
@@ -165,9 +186,13 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
                 <th>Appréciation du professeur<span className="coef">{b.studioRelie ? "reprise du Studio, modifiable" : "à écrire"}</span></th>
               </tr></thead>
               <tbody>
-                {b.eleves!.map(e => (
-                  <tr key={e.id}>
-                    <td className="fixe"><span className="nom">{e.nom} {e.prenom}</span>
+                {elevesOrdonnes.map(e => (
+                  <tr key={e.id} className={reglCopie.exclus.includes(e.id) ? "hors-copie" : ""}>
+                    <td className="fixe"><span className="ordre-copie">
+                        <button className="lien" title="Monter dans la liste" onClick={() => deplacer(e.id, -1)}>▲</button>
+                        <button className="lien" title="Descendre dans la liste" onClick={() => deplacer(e.id, 1)}>▼</button>
+                        <input type="checkbox" title="Coché : l'élève est dans la copie ; décochez pour l'en exclure" checked={!reglCopie.exclus.includes(e.id)} onChange={() => basculerExclu(e.id)} />
+                      </span> <span className="nom">{e.nom} {e.prenom}</span>
                       <span className="publier-eleve"><BoutonPublier eleve publieLe={b.publieesEleves?.[e.id] || null}
                         onPublier={async () => { try { await api("/api/publier/bulletin", { trimestre, classe, refId: e.id }); await charger(); } catch (err: any) { setMsg(err.message); } }}
                         onRetirer={async () => { try { await api("/api/publier/bulletin", { trimestre, classe, refId: e.id, retirer: true }); await charger(); } catch (err: any) { setMsg(err.message); } }} /></span></td>
