@@ -25,8 +25,9 @@ test("note : moyenne des colonnes, dernier essai du trimestre", () => {
 });
 
 test("note : colonnes sans résultat ignorées, aucune → pas de note", () => {
-  assert.equal(noteSur20({ a: [{ percent: 55, at: null }] }, ["a", "b"], t1), 11);
-  assert.equal(noteSur20({}, ["a"], t1), null);
+  assert.equal(noteSur20({ a: [{ percent: 55, at: null }] }, ["a", "b"], t1), 5.5); // « b » pas fait : 0 par défaut
+  assert.equal(noteSur20({}, ["a"], t1), 0); // rien de fait : 0
+  assert.equal(noteSur20({}, [], t1), null); // aucune colonne retenue : pas de note
 });
 
 test("saisie d'une note", () => {

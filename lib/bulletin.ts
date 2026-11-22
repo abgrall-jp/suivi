@@ -71,7 +71,7 @@ export function noteColonne(essais: Essai[] | undefined, periode: { debut: strin
 
 /**
  * Note sur 20 d'un élève : moyenne des colonnes retenues, pondérée par leur coefficient.
- * Aucune colonne avec résultat : pas de note.
+ * Un exercice retenu mais pas fait compte 0. Aucune colonne retenue : pas de note.
  */
 export function noteSur20(essais: Record<string, Essai[]>, colonnes: (string | ColonneNote)[], periode: { debut: string; fin: string }): number | null {
   let somme = 0, poids = 0;
@@ -79,8 +79,9 @@ export function noteSur20(essais: Record<string, Essai[]>, colonnes: (string | C
     const cle = typeof c === "string" ? c : c.cle;
     const coef = typeof c === "string" ? 1 : lireCoef(c.coef);
     const e = essaiRetenu(essais[cle], periode);
-    if (!e) continue;
-    somme += Math.max(0, Math.min(100, e.percent)) * coef; poids += coef;
+    // Exercice choisi pour le bulletin mais pas fait : 0 par défaut (l'enseignant peut saisir une note à la place).
+    poids += coef;
+    if (e) somme += Math.max(0, Math.min(100, e.percent)) * coef;
   }
   if (!poids) return null;
   return Math.round((somme / poids / 5) * 10) / 10;

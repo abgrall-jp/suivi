@@ -135,7 +135,7 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
   const copier = async () => {
     const lignes = elevesOrdonnes.filter(e => !reglCopie.exclus.includes(e.id)).map(e => {
       const v = aCopier === "final" ? (e.finale ?? e.calculee) : aCopier === "calculee" ? e.calculee : e.notes?.[aCopier];
-      return typeof v === "number" ? note(v) : "";
+      return typeof v === "number" ? note(v) : "0";
     });
     try { await navigator.clipboard.writeText(lignes.join("\n")); setInfo(`${lignes.length} lignes copiées${reglCopie.exclus.length ? ` (${reglCopie.exclus.length} élève${reglCopie.exclus.length > 1 ? "s" : ""} exclu${reglCopie.exclus.length > 1 ? "s" : ""})` : ""} : collez-les dans la colonne du logiciel de notes, dans l'ordre de la liste ci-dessous.`); }
     catch { setMsg("Copie impossible : autorisez le presse-papiers pour ce site."); }
@@ -157,7 +157,7 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
         {pret && <span className="ligne"><select value={aCopier} onChange={e => setACopier(e.target.value)} title="Notes à copier">
           <option value="final">Note définitive (sinon calculée)</option><option value="calculee">Moyenne calculée</option>
           {colonnes.map(c => <option key={c.cle} value={c.cle}>{c.titre}</option>)}</select>
-          <button title="Copie une note par ligne, dans l'ordre de la classe, à coller dans École Directe" onClick={copier}>Copier la colonne</button></span>}
+          <button className="principal" title="Copie une note par ligne, dans l'ordre de la classe, à coller dans École Directe" onClick={copier}>Copier la colonne (École Directe)</button></span>}
         {pret && <span className="defilement"><button title="Voir les colonnes de gauche" onClick={() => decaler(-1)}>◀</button><button title="Voir les colonnes de droite" onClick={() => decaler(1)}>▶</button></span>}
         {pret && <BoutonPublier publieLe={b.publieLe || null}
           onPublier={async () => { try { await api("/api/publier/bulletin", { trimestre, classe }); setInfo("Bulletin publié : chaque élève et ses parents voient leur ligne dans l'espace Famille."); await charger(); } catch (e: any) { setMsg(e.message); } }}
@@ -175,7 +175,7 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
             <table className="tableau bulletin">
               <thead><tr>
                 <th className="fixe">Élève</th>
-                {colonnes.map(c => <th key={c.cle} className="exo" title={`${c.app} : ${c.titre}`}><EnteteColonne titre={c.titre} />
+                {colonnes.map(c => <th key={c.cle} className="exo" title={`${c.app} : ${c.titre}`}><span className="app-col">{c.app}</span><EnteteColonne titre={c.titre} />
                   <span className="coef">coef. <ChampCoef valeur={c.coef ?? 1} onValider={async v => {
                     setMsg("");
                     try { await api("/api/bulletin/colonnes", { trimestre, classe, colonnes: colonnes.map(x => (x.cle === c.cle ? { ...x, coef: v } : x)), externes }); await charger(); } catch (e: any) { setMsg(e.message); }
@@ -199,7 +199,7 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
                     {colonnes.map(c => {
                       const manuelle = !!e.manuelles?.includes(c.cle);
                       return <td key={c.cle} className={manuelle ? "manuelle" : ""} title={manuelle ? "Note saisie à la main" : "Note des applications (saisir une note pour la remplacer)"}>
-                        <ChampNote valeur={e.notes?.[c.cle] ?? null} indication="–" onValider={v => saisirNote(e.id, c.cle, v, manuelle)} />
+                        <ChampNote valeur={e.notes?.[c.cle] ?? null} indication="0" onValider={v => saisirNote(e.id, c.cle, v, manuelle)} />
                         <AutreNote autre={e.autres?.[c.cle]} onEffacer={() => saisirNote(e.id, c.cle, "", true)} />
                       </td>;
                     })}
