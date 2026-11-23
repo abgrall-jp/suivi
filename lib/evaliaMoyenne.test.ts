@@ -19,10 +19,10 @@ test("quiz coef 1 + chatbot coef 2 : une colonne moyenne", () => {
   assert.ok(essais.get("e1")!["evalia:t1~ai-quiz"]); // anciennes colonnes gardées pour les bulletins existants
 });
 
-test("un seul des deux : moyenne sur ce résultat ; provisoire se propage", () => {
+test("un seul des deux : la partie manquante compte 0 (comme dans Eval IA) ; provisoire se propage", () => {
   const essais = new Map<string, Record<string, any[]>>([["e1", { "evalia:t1~chatbot": [{ percent: 50, score: "10/20", at: 5, provisoire: true }] }]]);
   const a = app(["t1~ai-quiz", "t1~chatbot"]);
   fusionnerEvalIA([a], [a], essais);
   const m = essais.get("e1")!["evalia:t1~moyenne"][0];
-  assert.equal(m.percent, 50); assert.equal(m.provisoire, true); assert.equal(m.parts.length, 1);
+  assert.equal(Math.round(m.percent * 10) / 10, 33.3); assert.equal(m.provisoire, true); assert.equal(m.parts.length, 2);
 });

@@ -67,8 +67,9 @@ export function fusionnerEvalIA<A extends App>(applications: A[], applicationsTo
       const q = lq?.length ? essaiQuiCompte(lq) : null, c = lc?.length ? essaiQuiCompte(lc) : null;
       if (!q && !c) continue;
       const presentes: Partie[] = [];
-      if (q) presentes.push({ nom: "Quiz", coef: COEF_QUIZ, percent: q.percent, score: q.score || `${fr(q.percent / 5)}/20`, ...(q.provisoire ? { provisoire: true } : {}) });
-      if (c) presentes.push({ nom: "Chatbot", coef: COEF_CHATBOT, percent: c.percent, score: c.score || `${fr(c.percent / 5)}/20`, ...(c.provisoire ? { provisoire: true } : {}) });
+      // Comme dans Eval IA : une partie non faite compte 0 dès que l'autre existe.
+      presentes.push(q ? { nom: "Quiz", coef: COEF_QUIZ, percent: q.percent, score: q.score || `${fr(q.percent / 5)}/20`, ...(q.provisoire ? { provisoire: true } : {}) } : { nom: "Quiz", coef: COEF_QUIZ, percent: 0, score: "0/20" });
+      presentes.push(c ? { nom: "Chatbot", coef: COEF_CHATBOT, percent: c.percent, score: c.score || `${fr(c.percent / 5)}/20`, ...(c.provisoire ? { provisoire: true } : {}) } : { nom: "Chatbot", coef: COEF_CHATBOT, percent: 0, score: "0/20" });
       const poids = presentes.reduce((s, p) => s + p.coef, 0);
       const percent = presentes.reduce((s, p) => s + p.percent * p.coef, 0) / poids;
       const at = Math.max(...[q?.at, c?.at].map(x => x ?? 0)) || null;
