@@ -94,6 +94,13 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
     try { await api("/api/notes-manuelles", { refId, cle, note: v, trimestre }, true); relireBientot(); } catch (e: any) { setMsg(e.message); charger(true); }
   };
 
+  // Ordre des élèves et élèves exclus de la copie, réglés pour coller dans le logiciel de notes (gardés dans ce navigateur, par classe).
+  const cleOrdre = `suivi-copie-${classe}`;
+  const [reglCopie, setReglCopie] = useState<{ ordre: string[]; exclus: string[] }>({ ordre: [], exclus: [] });
+  useEffect(() => {
+    try { const v = JSON.parse(localStorage.getItem(cleOrdre) || "null"); setReglCopie({ ordre: Array.isArray(v?.ordre) ? v.ordre : [], exclus: Array.isArray(v?.exclus) ? v.exclus : [] }); }
+    catch { setReglCopie({ ordre: [], exclus: [] }); }
+  }, [cleOrdre]);
   if (!b || !trimestre) return msg ? <p className="erreur">{msg}</p> : <p>Chargement…</p>;
   const externes = b.externes || [];
   const colonnes = b.colonnes || [];
@@ -107,6 +114,35 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
     a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
     a.download = `bulletin-${classe}-${trimestre}.csv`;
     a.click();
+  };
+
+  // Une colonne de notes à coller dans un logiciel de notes (École Directe) : une note par ligne, dans l'ordre de la classe.
+  const garder = (r: { ordre: string[]; exclus: string[] }) => { setReglCopie(r); try { localStorage.setItem(cleOrdre, JSON.stringify(r)); } catch { /* sans stockage : réglage pour cette page seulement */ } };
+  const elevesOrdonnes = (() => {
+    const base = b.eleves || [];
+    const rang = new Map(reglCopie.ordre.map((id, i) => [id, i]));
+    return base.map((e, i) => ({ e, i })).sort((x, y) => (rang.get(x.e.id) ?? 1e6 + x.i) - (rang.get(y.e.id) ?? 1e6 + y.i)).map(x => x.e);
+  })();
+  // Moyenne de la classe (élèves décochés exclus) ; un exercice non fait compte 0, comme dans la moyenne calculée.
+  const moyClasse = (val: (e: (typeof elevesOrdonnes)[number]) => number | null | undefined) => {
+    const v = elevesOrdonnes.filter(e => !reglCopie.exclus.includes(e.id)).map(val).filter((x): x is number => typeof x === "number");
+    return v.length ? note(Math.round(v.reduce((a, x) => a + x, 0) / v.length * 10) / 10) : "";
+  };
+  const deplacer = (id: string, sens: -1 | 1) => {
+    const ids = elevesOrdonnes.map(e => e.id);
+    const i = ids.indexOf(id), j = i + sens;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    garder({ ...reglCopie, ordre: ids });
+  };
+  const basculerExclu = (id: string) => garder({ ...reglCopie, exclus: reglCopie.exclus.includes(id) ? reglCopie.exclus.filter(x => x !== id) : [...reglCopie.exclus, id] });
+  const copier = async (quoi: string) => {
+    const lignes = elevesOrdonnes.filter(e => !reglCopie.exclus.includes(e.id)).map(e => {
+      const v = quoi === "final" ? (e.finale ?? e.calculee) : quoi === "calculee" ? e.calculee : e.notes?.[quoi];
+      return typeof v === "number" ? note(v) : "0";
+    });
+    try { await navigator.clipboard.writeText(lignes.join("\n")); setInfo(`${lignes.length} lignes copiées${reglCopie.exclus.length ? ` (${reglCopie.exclus.length} élève${reglCopie.exclus.length > 1 ? "s" : ""} exclu${reglCopie.exclus.length > 1 ? "s" : ""})` : ""} : collez-les dans la colonne du logiciel de notes, dans l'ordre de la liste ci-dessous.`); }
+    catch { setMsg("Copie impossible : autorisez le presse-papiers pour ce site."); }
   };
 
   const decaler = (sens: number) => defile.current?.scrollBy({ left: sens * Math.max(300, defile.current.clientWidth * 0.7), behavior: "smooth" });
@@ -139,27 +175,31 @@ export function VueBulletin({ actif = true }: { actif?: boolean }) {
             <table className="tableau bulletin">
               <thead><tr>
                 <th className="fixe">Élève</th>
-                {colonnes.map(c => <th key={c.cle} className="exo" title={`${c.app} : ${c.titre}`}><EnteteColonne titre={c.titre} />
+                {colonnes.map(c => <th key={c.cle} className="exo" title={`${c.app} : ${c.titre}`}><span className="app-col">{c.app}</span><span className="moy-classe" title="Moyenne de la classe (élèves décochés exclus ; non fait = 0)">classe : {moyClasse(e => e.notes?.[c.cle] ?? 0) || "–"}</span><button className="copier-col" title="Copier les notes de cette colonne (une par ligne) pour École Directe" onClick={() => copier(c.cle)}>📋 Copier</button><EnteteColonne titre={c.titre} />
                   <span className="coef">coef. <ChampCoef valeur={c.coef ?? 1} onValider={async v => {
                     setMsg("");
                     try { await api("/api/bulletin/colonnes", { trimestre, classe, colonnes: colonnes.map(x => (x.cle === c.cle ? { ...x, coef: v } : x)), externes }); await charger(); } catch (e: any) { setMsg(e.message); }
                   }} /></span></th>)}
-                <th>Moyenne calculée</th><th>Définitive</th>
+                <th>Moyenne calculée<span className="moy-classe" title="Moyenne de la classe (élèves décochés exclus)">classe : {moyClasse(e => e.calculee) || "–"}</span><button className="copier-col" title="Copier les moyennes calculées pour École Directe" onClick={() => copier("calculee")}>📋 Copier</button></th><th>Définitive<span className="moy-classe" title="Moyenne de la classe (élèves décochés exclus)">classe : {moyClasse(e => e.finale ?? e.calculee) || "–"}</span><button className="copier-col" title="Copier les notes définitives (sinon calculées) pour École Directe" onClick={() => copier("final")}>📋 Copier</button></th>
                 {externes.map(x => <th key={x.id}>{x.titre}</th>)}
                 <th>Appréciation de l'élève<span className="coef">Studio, partie élève</span></th>
                 <th>Appréciation du professeur<span className="coef">{b.studioRelie ? "reprise du Studio, modifiable" : "à écrire"}</span></th>
               </tr></thead>
               <tbody>
-                {b.eleves!.map(e => (
-                  <tr key={e.id}>
-                    <td className="fixe"><span className="nom">{e.nom} {e.prenom}</span>
+                {elevesOrdonnes.map(e => (
+                  <tr key={e.id} className={reglCopie.exclus.includes(e.id) ? "hors-copie" : ""}>
+                    <td className="fixe"><span className="ordre-copie">
+                        <button className="lien" title="Monter dans la liste" onClick={() => deplacer(e.id, -1)}>▲</button>
+                        <button className="lien" title="Descendre dans la liste" onClick={() => deplacer(e.id, 1)}>▼</button>
+                        <input type="checkbox" title="Coché : l'élève est dans la copie ; décochez pour l'en exclure" checked={!reglCopie.exclus.includes(e.id)} onChange={() => basculerExclu(e.id)} />
+                      </span> <span className="nom">{e.nom} {e.prenom}</span>
                       <span className="publier-eleve"><BoutonPublier eleve publieLe={b.publieesEleves?.[e.id] || null}
                         onPublier={async () => { try { await api("/api/publier/bulletin", { trimestre, classe, refId: e.id }); await charger(); } catch (err: any) { setMsg(err.message); } }}
                         onRetirer={async () => { try { await api("/api/publier/bulletin", { trimestre, classe, refId: e.id, retirer: true }); await charger(); } catch (err: any) { setMsg(err.message); } }} /></span></td>
                     {colonnes.map(c => {
                       const manuelle = !!e.manuelles?.includes(c.cle);
                       return <td key={c.cle} className={manuelle ? "manuelle" : ""} title={manuelle ? "Note saisie à la main" : "Note des applications (saisir une note pour la remplacer)"}>
-                        <ChampNote valeur={e.notes?.[c.cle] ?? null} indication="–" onValider={v => saisirNote(e.id, c.cle, v, manuelle)} />
+                        <ChampNote valeur={e.notes?.[c.cle] ?? null} indication="0" onValider={v => saisirNote(e.id, c.cle, v, manuelle)} />
                         <AutreNote autre={e.autres?.[c.cle]} onEffacer={() => saisirNote(e.id, c.cle, "", true)} />
                       </td>;
                     })}
@@ -244,16 +284,24 @@ function ReglageColonnes({ b, trimestre, classe, onFini }: { b: Bulletin; trimes
   const [externes, setExternes] = useState<Externe[]>(b.externes || []);
   const [nouvelle, setNouvelle] = useState("");
   const [msg, setMsg] = useState("");
+  const [tout, setTout] = useState(false); // proposer aussi les exercices que personne n'a commencés
+  const [plus, setPlus] = useState<Colonne[]>([]);
+  useEffect(() => {
+    if (!tout) { setPlus([]); return; }
+    api<Bulletin>(`/api/bulletin?trimestre=${trimestre}&classe=${encodeURIComponent(classe)}&tout=1`, undefined, true)
+      .then(d => setPlus(d.colonnesDispo.filter(c => !b.colonnesDispo.some(x => x.cle === c.cle)))).catch(e => setMsg(e.message));
+  }, [tout, trimestre, classe]);
   const parApp = new Map<string, Colonne[]>();
   // Les colonnes déjà retenues restent proposées, même si l'exercice n'a plus de résultat.
-  for (const c of [...b.colonnesDispo, ...(b.colonnes || []).filter(x => !b.colonnesDispo.some(d => d.cle === x.cle))]) parApp.set(c.app, [...(parApp.get(c.app) || []), c]);
+  for (const c of [...b.colonnesDispo, ...plus, ...(b.colonnes || []).filter(x => !b.colonnesDispo.some(d => d.cle === x.cle) && !plus.some(d => d.cle === x.cle))]) parApp.set(c.app, [...(parApp.get(c.app) || []), c]);
   const basculer = (cle: string) => setCoches(c => (c.includes(cle) ? c.filter(x => x !== cle) : [...c, cle]));
 
   return (
     <div className="carte reglage">
       <h3>Notes reprises dans le bulletin</h3>
       <p className="petit">Cochez les exercices qui comptent pour ce trimestre et donnez-leur un coefficient. Seuls les exercices faits par les élèves de cette classe sont proposés. La moyenne calculée est la moyenne de ces notes, avec leurs coefficients, sur 20.</p>
-      {!b.colonnesDispo.length && <p>Pas encore d'exercice avec des résultats pour cette classe.</p>}
+      <label className="petit"><input type="checkbox" checked={tout} onChange={e => setTout(e.target.checked)} /> Proposer aussi les exercices non commencés</label>
+      {!b.colonnesDispo.length && !plus.length && <p>Pas encore d'exercice avec des résultats pour cette classe.</p>}
       {Array.from(parApp.entries()).map(([app, cols]) => (
         <fieldset key={app}>
           <legend>{app}</legend>
